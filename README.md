@@ -1,8 +1,10 @@
 # OpenSearch learning
 
 This repository is a small, incremental OpenSearch lab. It currently implements
-**Increment 1: run one local OpenSearch node**. There is deliberately no
-TypeScript application and no application-specific index yet.
+**Increment 2: create an index with an explicit mapping**. There is deliberately
+no TypeScript application and no indexed document yet.
+
+## Increment 1 — Run one local OpenSearch node
 
 ## Prerequisites
 
@@ -125,6 +127,89 @@ Rough analogy
 | Row           | Document                                 |
 | Column schema | Mapping                                  |
 | Primary key   | Document `_id`                           |
+
+## Increment 2 — Create an index with an explicit mapping
+
+A **mapping** defines how document fields are indexed: their names, types, and
+type-specific behavior. It is similar to part of a database schema, but it
+primarily describes search and indexing behavior.
+
+### Create `tickets-v1`
+
+The complete index definition is in
+[`mappings/tickets-v1.json`](mappings/tickets-v1.json). Create it directly with
+the OpenSearch REST API:
+
+```sh
+curl --fail \
+  --request PUT 'http://localhost:9200/tickets-v1' \
+  --header 'Content-Type: application/json' \
+  --data-binary '@mappings/tickets-v1.json'
+```
+
+`PUT /tickets-v1` creates the named index. The request includes both its
+settings and mapping; it does not index a document.
+
+This disposable one-node lab uses one primary shard and zero replicas. Zero
+replicas keeps cluster health green because a replica cannot be allocated to the
+same node as its primary. This is a local-learning choice, not a production
+default.
+
+Confirm that the index exists but still contains zero documents:
+
+```sh
+curl --fail 'http://localhost:9200/_cat/indices/tickets-v1?v'
+```
+
+Inspect the mapping returned by OpenSearch rather than only trusting the request
+file:
+
+```sh
+curl --fail 'http://localhost:9200/tickets-v1/_mapping?pretty'
+```
+
+If you want to repeat only Increment 2, remove this disposable index and run the
+create request again:
+
+```sh
+curl --fail --request DELETE 'http://localhost:9200/tickets-v1'
+```
+
+### Field choices
+
+| Field                 | Type      | Reason                                                                                                                                                                         |
+| --------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `customerId`          | `keyword` | An identifier is an exact value; it should not be broken into search tokens.                                                                                                   |
+| `title`               | `text`    | Human-written titles are intended for full-text search and are analyzed into tokens.                                                                                           |
+| `status`              | `keyword` | A status is a finite exact value used for equality filters and aggregations.                                                                                                   |
+| `dueDate`             | `date`    | OpenSearch parses it as a date, enabling date validation, ranges, and date-aware sorting. `strict_date` accepts the planned `YYYY-MM-DD` value without accepting looser forms. |
+| `responseTimeMinutes` | `integer` | This is a whole-number measurement, so numeric ranges and sorting should use numeric rather than textual semantics.                                                            |
+
+A **field type** controls how OpenSearch validates and converts a value and
+which internal search structures it builds. The JSON representation alone does
+not communicate all of that intent: both an identifier and prose arrive as JSON
+strings, but `keyword` and `text` index those strings differently.
+
+### Explicit and dynamic mappings
+
+An **explicit mapping** declares field types before documents arrive, as this
+lab does. With **dynamic mapping**, OpenSearch sees an undeclared field in a
+document and infers a mapping from the first value it receives. For example, a
+date-looking string might become a `date`, while another string becomes `text`
+with a `keyword` subfield, depending on index settings and detection rules.
+
+That first inferred type becomes part of the index mapping. It is not inferred
+again for every document, and most existing field types cannot simply be
+changed in place. A misleading first value can therefore create later indexing
+failures or incorrect search behavior and ultimately require a new index plus
+reindexing.
+
+The mapping uses `"dynamic": "strict"`. If a later document contains an
+undeclared field, OpenSearch rejects that document rather than silently growing
+the mapping. This makes schema mistakes visible during the exercise. Dynamic
+mapping can be convenient for exploration, but uncontrolled fields can cause
+type surprises, inconsistent environments, and mapping growth in long-lived
+systems.
 
 ## Stop or reset the lab
 

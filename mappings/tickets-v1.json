@@ -1,0 +1,29 @@
+{
+  "settings": {
+    "index": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0
+    }
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "customerId": {
+        "type": "keyword"
+      },
+      "title": {
+        "type": "text"
+      },
+      "status": {
+        "type": "keyword"
+      },
+      "dueDate": {
+        "type": "date",
+        "format": "strict_date"
+      },
+      "responseTimeMinutes": {
+        "type": "integer"
+      }
+    }
+  }
+}
