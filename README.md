@@ -1,9 +1,37 @@
 # OpenSearch learning
 
-This repository is a small, incremental OpenSearch lab. It currently implements
-**Increment 5: add object data**.
+This repository is a hands-on OpenSearch lab focused on how data is modeled, indexed, queried, and evolved over time. The exercises build from a single local node and explicit mappings toward schema changes, reindexing, aliases, migration safety, and integration testing.
 
-## Increment 1 — Run one local OpenSearch node
+Each section introduces one small, inspectable change so the effect on OpenSearch can be observed directly rather than hidden behind application abstractions. The examples are intentionally simple and disposable; the goal is to understand the mechanics and tradeoffs that matter when operating or changing a real search index.
+
+## Learning path
+
+1. [Run one local OpenSearch node](#1-run-one-local-opensearch-node)
+2. [Create an index with an explicit mapping](#2-create-an-index-with-an-explicit-mapping)
+3. [Index and retrieve a document from TypeScript](#3-index-and-retrieve-a-document-from-typescript)
+4. [Learn `text` versus `keyword`](#4-learn-text-versus-keyword)
+5. [Add object data](#5-add-object-data)
+6. Understand `object` versus `nested`
+7. Inspect existing state before changing it
+8. Make a compatible mapping change
+9. Attempt an incompatible mapping change
+10. Create `tickets-v2`
+11. Reindex v1 into v2
+12. Introduce an alias
+13. Perform an alias-based migration
+14. Understand reads and writes during migration
+15. Add a basic integration test against local OpenSearch
+16. Run OpenSearch with Testcontainers
+17. Test the mapping, not just the application result
+18. Test a migration against existing data
+19. Deliberately break the migration
+20. Model a support-monitoring document
+21. Test application code against OpenSearch
+22. Safe test cleanup and isolation
+23. Optional: index templates
+24. Final migration exercise
+
+## 1. Run one local OpenSearch node
 
 ## Prerequisites
 
@@ -127,7 +155,7 @@ Rough analogy
 | Column schema | Mapping                                  |
 | Primary key   | Document `_id`                           |
 
-## Increment 2 — Create an index with an explicit mapping
+## 2. Create an index with an explicit mapping
 
 A **mapping** defines how document fields are indexed: their names, types, and
 type-specific behavior. It is similar to part of a database schema, but it
@@ -210,7 +238,7 @@ mapping can be convenient for exploration, but uncontrolled fields can cause
 type surprises, inconsistent environments, and mapping growth in long-lived
 systems.
 
-## Increment 3 — Index and retrieve a document from TypeScript
+## 3. Index and retrieve a document from TypeScript
 
 Install the locked dependencies:
 
@@ -284,7 +312,7 @@ the index API supports `refresh: "wait_for"`, which waits for the next refresh.
 Forcing a refresh after every write is generally avoided because it adds work
 and reduces indexing throughput.
 
-## Increment 4 — Learn `text` versus `keyword`
+## 4. Learn `text` versus `keyword`
 
 The mapping has not changed. Inspect it again before running the queries:
 
@@ -395,7 +423,7 @@ This increment does not add `title.keyword`. Such a multi-field is useful only
 when the same title must support both full-text search and exact-value
 sorting/aggregation; the current queries do not require it.
 
-## Increment 5 — Add object data
+## 5. Add object data
 
 Tickets now include a service object:
 
