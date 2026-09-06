@@ -1,7 +1,7 @@
 # OpenSearch learning
 
 This repository is a small, incremental OpenSearch lab. It currently implements
-**Increment 3: index and retrieve one document from TypeScript**.
+**Increment 4: learn `text` versus `keyword`**.
 
 ## Increment 1 — Run one local OpenSearch node
 
@@ -283,6 +283,117 @@ request a manual refresh. When a workflow truly must search for its own write,
 the index API supports `refresh: "wait_for"`, which waits for the next refresh.
 Forcing a refresh after every write is generally avoided because it adds work
 and reduces indexing throughput.
+
+## Increment 4 — Learn `text` versus `keyword`
+
+The mapping has not changed. Inspect it again before running the queries:
+
+```sh
+curl --fail 'http://localhost:9200/tickets-v1/_mapping?pretty'
+```
+
+Notice that `title` is `text`, while `status` is `keyword`. The script in
+[`src/search-tickets.ts`](src/search-tickets.ts) indexes four tickets and runs
+three queries that expose the difference.
+
+Before running it, predict the results:
+
+1. Will a full-text query for uppercase `PAYMENT` match titles containing
+   `Payment`?
+2. Which documents have the exact status `open`?
+3. Will an exact `term` query for capitalized `Payment` work correctly against
+   the `text` title field?
+
+Then run:
+
+```sh
+npm run search
+```
+
+The script uses stable document IDs, so it can be rerun without creating
+duplicates. It explicitly refreshes once after indexing all four documents so
+the queries produce deterministic results immediately. This is useful for the
+exercise; production indexing normally relies on periodic refreshes or uses
+`refresh: "wait_for"` only when immediate search visibility is required.
+
+After reruns, `_cat/indices` may show a nonzero `docs.deleted` even though there
+are still only four current documents. Internally, replacing a document writes
+a new version and marks the old version as deleted; a later segment merge can
+reclaim it.
+
+### `text`: analyzed content
+
+The first query is a `match` query against `title`:
+
+```json
+{
+  "match": {
+    "title": "PAYMENT"
+  }
+}
+```
+
+A `text` field is intended for full-text search. During indexing, its
+**analyzer** transforms text into **tokens**. With the default standard analyzer,
+`Payment service unavailable` produces tokens similar to `payment`, `service`,
+and `unavailable`. A `match` query analyzes its query text in the same way, so
+uppercase `PAYMENT` becomes `payment` and matches `ticket-1` and `ticket-2`.
+
+Full-text queries run in query context: they can calculate a relevance `_score`
+describing how well each document matches.
+
+### `keyword`: exact values
+
+The second query places a `term` query against `status` in `bool.filter`:
+
+```json
+{
+  "bool": {
+    "filter": {
+      "term": {
+        "status": "open"
+      }
+    }
+  }
+}
+```
+
+A `keyword` field represents one exact value; `open` remains the single value
+`open`. It is appropriate for identifiers, statuses, sorting, aggregations, and
+exact matching. Because this clause is in filter context, OpenSearch answers a
+yes/no question and does not calculate relevance scores. It matches `ticket-1`
+and `ticket-3`.
+
+Filtering is appropriate when documents either satisfy a structured condition
+or do not. Full-text search is appropriate when documents may match human text
+to different degrees.
+
+### The intentionally inappropriate query
+
+The third query uses `term` against `title`:
+
+```json
+{
+  "term": {
+    "title": "Payment"
+  }
+}
+```
+
+A `term` query does not analyze its input. It looks for the exact token
+`Payment`, but the title analyzer stored the lowercase token `payment`, so this
+query returns no matches. Changing the query to lowercase might happen to find
+documents, but it would still couple the application to analyzer output and
+would not be the correct general-purpose full-text query.
+
+Conversely, `match` can technically target a `keyword` field, but it does not
+turn that field into full text: the keyword analyzer still treats the entire
+value as one token. Prefer `match` for analyzed prose and `term`/filter context
+for exact structured values so the intent is explicit.
+
+This increment does not add `title.keyword`. Such a multi-field is useful only
+when the same title must support both full-text search and exact-value
+sorting/aggregation; the current queries do not require it.
 
 ## Stop or reset the lab
 

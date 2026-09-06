@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "search": "node src/search-tickets.ts",
     "ticket": "node src/index-ticket.ts"
   },
   "engines": {
