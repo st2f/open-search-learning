@@ -1,8 +1,7 @@
 # OpenSearch learning
 
 This repository is a small, incremental OpenSearch lab. It currently implements
-**Increment 2: create an index with an explicit mapping**. There is deliberately
-no TypeScript application and no indexed document yet.
+**Increment 3: index and retrieve one document from TypeScript**.
 
 ## Increment 1 — Run one local OpenSearch node
 
@@ -210,6 +209,80 @@ the mapping. This makes schema mistakes visible during the exercise. Dynamic
 mapping can be convenient for exploration, but uncontrolled fields can cause
 type surprises, inconsistent environments, and mapping growth in long-lived
 systems.
+
+## Increment 3 — Index and retrieve a document from TypeScript
+
+Install the locked dependencies:
+
+```sh
+npm ci
+```
+
+The only direct dependency is the official OpenSearch JavaScript client. This
+lab requires Node.js 24, which can run the erasable TypeScript syntax used here
+without a separate runtime such as `tsx` or `ts-node`. Node strips the type
+annotations before execution; it does not perform TypeScript type checking.
+
+Make sure OpenSearch is running and that `tickets-v1` has been created using the
+Increment 2 command. Then run:
+
+```sh
+npm run ticket
+```
+
+The script in [`src/index-ticket.ts`](src/index-ticket.ts) performs two direct
+client calls:
+
+```text
+TypeScript
+  ↓
+OpenSearch JavaScript client
+  ↓
+tickets-v1
+```
+
+1. `client.index(...)` sends one ticket document with the explicit `_id`
+   `ticket-1`.
+2. `client.get(...)` retrieves that document by its index and `_id`.
+3. The script prints the returned `_source`.
+
+The `Ticket` type checks the document shape when a TypeScript checker is used.
+It does not create or enforce the OpenSearch mapping at runtime; the mapping and
+the TypeScript type are separate definitions that currently agree.
+
+### Indexing, IDs, and `_source`
+
+**Indexing** validates the supplied values against the mapping and updates the
+index's internal search structures. The document's `_id` is metadata, so it is
+passed separately from the document body. An `_id` is unique only within its
+index; `tickets-v1` plus `ticket-1` identifies this document.
+
+The basic write operations have different intentions:
+
+- The index operation creates a document when the `_id` is new and replaces the
+  document when that `_id` already exists. Running this script repeatedly is
+  therefore safe for the exercise, but the result changes from `created` to
+  `updated`.
+- A create operation is insert-only and fails if the `_id` already exists.
+- An update operation applies a partial update or scripted change to an existing
+  document rather than supplying a complete replacement.
+
+`_source` is the original JSON object stored for retrieval. It is not the same
+thing as the analyzed terms and other internal structures used during search.
+The TypeScript client response exposes it as `getResponse.body._source`.
+
+### Refresh and search visibility
+
+An acknowledged indexing request does not necessarily make the document
+immediately visible to search queries. A **refresh** makes recent shard changes
+searchable, and OpenSearch normally refreshes active indexes periodically.
+
+Retrieval by `_id`, as used here, is real-time by default and can see the newly
+indexed document without waiting for a refresh. That is why this script does not
+request a manual refresh. When a workflow truly must search for its own write,
+the index API supports `refresh: "wait_for"`, which waits for the next refresh.
+Forcing a refresh after every write is generally avoided because it adds work
+and reduces indexing throughput.
 
 ## Stop or reset the lab
 
