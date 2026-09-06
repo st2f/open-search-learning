@@ -1,7 +1,7 @@
 # OpenSearch learning
 
 This repository is a small, incremental OpenSearch lab. It currently implements
-**Increment 4: learn `text` versus `keyword`**.
+**Increment 5: add object data**.
 
 ## Increment 1 — Run one local OpenSearch node
 
@@ -394,6 +394,99 @@ for exact structured values so the intent is explicit.
 This increment does not add `title.keyword`. Such a multi-field is useful only
 when the same title must support both full-text search and exact-value
 sorting/aggregation; the current queries do not require it.
+
+## Increment 5 — Add object data
+
+Tickets now include a service object:
+
+```json
+{
+  "service": {
+    "id": "service-42",
+    "name": "Payments API"
+  }
+}
+```
+
+This increment uses a new disposable index, `tickets-v2`, whose complete mapping
+is in [`mappings/tickets-v2.json`](mappings/tickets-v2.json). Adding an object
+field is a supported additive mapping change, so a new index is not technically
+required here. Keeping `tickets-v1` unchanged makes the two learning states
+independently inspectable and avoids mutating the previous exercise implicitly.
+
+Create the index:
+
+```sh
+curl --fail \
+  --request PUT 'http://localhost:9200/tickets-v2' \
+  --header 'Content-Type: application/json' \
+  --data-binary '@mappings/tickets-v2.json'
+```
+
+Inspect its mapping and compare it with `tickets-v1`:
+
+```sh
+curl --fail 'http://localhost:9200/tickets-v2/_mapping?pretty'
+curl --fail 'http://localhost:9200/tickets-v1/_mapping?pretty'
+```
+
+The returned mapping may omit the explicit `"type": "object"` from `service`.
+An object containing `properties` is the default object representation, so the
+mapping is still an `object`; OpenSearch has only normalized the response.
+
+Then index three tickets and query by service:
+
+```sh
+npm run search:service
+```
+
+The query uses the dotted field path `service.id`:
+
+```json
+{
+  "bool": {
+    "filter": {
+      "term": {
+        "service.id": "service-42"
+      }
+    }
+  }
+}
+```
+
+It matches the two tickets belonging to the Payments API.
+
+### Objects and dot notation
+
+The `service` field is mapped as `object`, with its own explicitly mapped
+properties. `service.id` is `keyword` because it is queried as an exact
+identifier. `service.name` is `text` because it is human-readable content.
+`dynamic: "strict"` on the object makes undeclared service properties fail
+indexing instead of being mapped accidentally.
+
+The mapping represents the hierarchy with nested `properties` objects, while
+queries address leaf fields using dot notation such as `service.id`. Conceptually,
+OpenSearch indexes the leaf values under paths like:
+
+```text
+service.id   -> service-42
+service.name -> analyzed terms: payments, api
+```
+
+The stored `_source` still preserves the original JSON shape:
+
+```text
+service: { id: "service-42", name: "Payments API" }
+```
+
+The `service` object is not a separate OpenSearch document, table, or joined
+record. Its values are part of each ticket document and are duplicated when
+multiple tickets refer to the same service. OpenSearch does not enforce a
+foreign key between `service.id` and another index.
+
+This is a normal `object`, not the special `nested` field type. That distinction
+matters when a field contains an array of objects and is the subject of
+Increment 6.
 
 ## Stop or reset the lab
 

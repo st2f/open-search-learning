@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "search": "node src/search-tickets.ts",
+    "search:service": "node src/search-tickets-by-service.ts",
     "ticket": "node src/index-ticket.ts"
   },
   "engines": {
