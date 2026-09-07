@@ -13,7 +13,7 @@ Each section introduces one small, inspectable change so the effect on OpenSearc
 5. [Add object data](#5-add-object-data)
 6. [Understand `object` versus `nested`](#6-understand-object-versus-nested)
 7. [Inspect existing state before changing it](#7-inspect-existing-state-before-changing-it)
-8. Make a compatible mapping change
+8. [Make a compatible mapping change](#8-make-a-compatible-mapping-change)
 9. Attempt an incompatible mapping change
 10. Create `tickets-v2`
 11. Reindex v1 into v2
@@ -715,6 +715,108 @@ a separate index rather than altering the existing one.
 
 No schema update is made in this increment. The next increment can use this
 inspection baseline to demonstrate a compatible additive mapping change.
+
+## 8. Make a compatible mapping change
+
+This increment adds `priority` to the existing `tickets-v1` mapping. It does
+not replace the index or modify the original Increment 2 mapping file; the
+separate update file preserves the before-and-after steps of the exercise.
+
+First inspect the live mapping and confirm that it does not already contain
+`priority`:
+
+```sh
+curl --fail-with-body 'http://localhost:9200/tickets-v1/_mapping?pretty'
+```
+
+The mapping update body is in
+[`mappings/tickets-v1-add-priority.json`](mappings/tickets-v1-add-priority.json):
+
+```json
+{
+  "properties": {
+    "priority": {
+      "type": "keyword"
+    }
+  }
+}
+```
+
+Apply it to the existing index:
+
+```sh
+curl --fail-with-body \
+  --request PUT 'http://localhost:9200/tickets-v1/_mapping' \
+  --header 'Content-Type: application/json' \
+  --data-binary '@mappings/tickets-v1-add-priority.json'
+```
+
+`PUT /tickets-v1/_mapping` updates the mapping of that index; it does not create
+a new index. This particular request is safe to repeat because it declares the
+same type for the same field. Inspect the live mapping again and verify that
+`priority` is now a `keyword` while every earlier field is unchanged:
+
+```sh
+curl --fail-with-body 'http://localhost:9200/tickets-v1/_mapping?pretty'
+```
+
+`keyword` is appropriate because priority is a structured exact value used for
+filtering, not prose for full-text search. The mapping does not enforce a fixed
+set of allowed keyword values. The TypeScript example narrows its compile-time
+type to `"low" | "normal" | "high"`, but OpenSearch would still accept another
+string unless validation is added outside this mapping.
+
+### Compare old and new document shapes
+
+Run the focused example after applying the mapping update:
+
+```sh
+npm run search:priority
+```
+
+[`src/search-tickets-by-priority.ts`](src/search-tickets-by-priority.ts) indexes
+two documents with stable IDs:
+
+- `ticket-5` represents an older writer and omits `priority`.
+- `ticket-6` represents a newer writer and sends `priority: "high"`.
+
+The `priority?` property in the TypeScript `Ticket` type is optional: the `?`
+allows either document shape at compile time. It does not make an OpenSearch
+mapping change or perform runtime validation.
+
+The script refreshes once, then performs three searches limited to those two
+IDs. The first returns both document styles and prints `undefined` for the
+missing TypeScript property on `ticket-5`. The second uses an exact `term`
+filter and returns only `ticket-6`. The third uses an `exists` query inside
+`must_not` and returns only `ticket-5`, which has no indexed `priority` value.
+
+### Why the change is compatible
+
+No existing search representation was assigned to the new field name, so
+OpenSearch can add the `priority` definition without reinterpreting old indexed
+values. New documents can now index that field. Existing documents are not
+rewritten or backfilled: their `_source` remains exactly as it was, and they
+have no indexed term for `priority`. This is why no reindex is needed for this
+exercise.
+
+`dynamic: "strict"` distinguishes **known fields** from **unknown fields**; it
+does not make known fields required. Before this mapping update, `priority` was
+unknown and a document containing it would be rejected. After the update,
+`priority` is known but still optional.
+
+### Field absence is not quite SQL `NULL`
+
+After adding a nullable SQL column, every row has that column in the table's
+schema; pre-existing rows normally observe `NULL` until a value or default is
+provided. OpenSearch documents retain their individual JSON shapes. An older
+document can have no `priority` key in `_source` at all.
+
+By default, both an absent field and a field explicitly supplied as JSON `null`
+produce no indexed value, so an `exists` query does not distinguish them.
+Their `_source` can still distinguish `{}` from `{ "priority": null }`.
+
+Do not reindex for this increment. The unchanged older document is the evidence
+that an additive mapping update does not rewrite existing data.
 
 ## Stop or reset the lab
 
