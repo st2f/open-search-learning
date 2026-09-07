@@ -11,7 +11,7 @@ Each section introduces one small, inspectable change so the effect on OpenSearc
 3. [Index and retrieve a document from TypeScript](#3-index-and-retrieve-a-document-from-typescript)
 4. [Learn `text` versus `keyword`](#4-learn-text-versus-keyword)
 5. [Add object data](#5-add-object-data)
-6. Understand `object` versus `nested`
+6. [Understand `object` versus `nested`](#6-understand-object-versus-nested)
 7. Inspect existing state before changing it
 8. Make a compatible mapping change
 9. Attempt an incompatible mapping change
@@ -515,6 +515,65 @@ foreign key between `service.id` and another index.
 This is a normal `object`, not the special `nested` field type. That distinction
 matters when a field contains an array of objects and is the subject of
 Increment 6.
+
+## 6. Understand `object` versus `nested`
+
+This increment uses the same event history in two indexes. `tickets-v3` maps
+`events` as a normal `object`; `tickets-v4` maps it as `nested`. Keeping both
+indexes makes the behavioral difference directly observable.
+
+Create the normal-object index:
+
+```sh
+curl --fail \
+  --request PUT 'http://localhost:9200/tickets-v3' \
+  --header 'Content-Type: application/json' \
+  --data-binary '@mappings/tickets-v3.json'
+```
+
+Index the example tickets and run the normal object query:
+
+```sh
+npm run search:events
+```
+
+The query requires both leaf-field predicates, but it returns `ticket-1` and
+`ticket-2`. For `ticket-1`, a conceptual view of the flattened indexed values
+is:
+
+```text
+events.type    -> [ASSIGNED, RESOLVED]
+events.actorId -> [agent-7, agent-9]
+```
+
+Both requested values exist in the ticket, but they do not belong to the same
+event. A normal object array does not preserve that association for querying.
+
+Now create the nested index:
+
+```sh
+curl --fail \
+  --request PUT 'http://localhost:9200/tickets-v4' \
+  --header 'Content-Type: application/json' \
+  --data-binary '@mappings/tickets-v4.json'
+```
+
+Run the nested version of the query:
+
+```sh
+npm run search:events:nested
+```
+
+The `nested` query names `events` as its `path` and places both `term` clauses
+inside that query. They must therefore match the same event, so only `ticket-2`
+is returned.
+
+OpenSearch implements each nested array element as a hidden internal document.
+This preserves per-element field associations, but increases the number of
+internally indexed documents and requires nested-aware queries, aggregations,
+and sorting. Use a normal object when cross-property association is irrelevant;
+use `nested` when predicates on several properties must apply to the same array
+element.
 
 ## Stop or reset the lab
 

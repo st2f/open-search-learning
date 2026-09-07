@@ -5,6 +5,8 @@
   "scripts": {
     "search": "node src/search-tickets.ts",
     "search:service": "node src/search-tickets-by-service.ts",
+    "search:events": "node src/search-tickets-by-events.ts",
+    "search:events:nested": "node src/search-tickets-by-nested-events.ts",
     "ticket": "node src/index-ticket.ts"
   },
   "engines": {
