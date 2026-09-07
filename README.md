@@ -12,7 +12,7 @@ Each section introduces one small, inspectable change so the effect on OpenSearc
 4. [Learn `text` versus `keyword`](#4-learn-text-versus-keyword)
 5. [Add object data](#5-add-object-data)
 6. [Understand `object` versus `nested`](#6-understand-object-versus-nested)
-7. Inspect existing state before changing it
+7. [Inspect existing state before changing it](#7-inspect-existing-state-before-changing-it)
 8. Make a compatible mapping change
 9. Attempt an incompatible mapping change
 10. Create `tickets-v2`
@@ -66,7 +66,7 @@ When `docker compose ps` reports the service as `healthy`, verify that the node
 answers:
 
 ```sh
-curl --fail http://localhost:9200/
+curl --fail-with-body http://localhost:9200/
 ```
 
 The JSON response identifies the node, cluster, and OpenSearch version. In this
@@ -78,7 +78,7 @@ cluster's only node.
 Cluster health:
 
 ```sh
-curl --fail 'http://localhost:9200/_cluster/health?pretty'
+curl --fail-with-body 'http://localhost:9200/_cluster/health?pretty'
 ```
 
 The response should report `number_of_nodes: 1`. A fresh cluster should be
@@ -88,7 +88,7 @@ shards: OpenSearch will not place a replica on the same node as its primary.
 List indexes:
 
 ```sh
-curl --fail 'http://localhost:9200/_cat/indices?v'
+curl --fail-with-body 'http://localhost:9200/_cat/indices?v'
 ```
 
 At this increment there is no application-specific index, so a fresh cluster
@@ -98,14 +98,14 @@ some configurations; that does not make them application indexes.
 Inspect all current mappings:
 
 ```sh
-curl --fail 'http://localhost:9200/_mapping?pretty'
+curl --fail-with-body 'http://localhost:9200/_mapping?pretty'
 ```
 
 With no indexes, this returns an empty JSON object (`{}`). Once a specific index
 exists, inspect only that index with:
 
 ```sh
-curl --fail 'http://localhost:9200/<index-name>/_mapping?pretty'
+curl --fail-with-body 'http://localhost:9200/<index-name>/_mapping?pretty'
 ```
 
 `<index-name>` is a placeholder, not an index to create during Increment 1.
@@ -168,7 +168,7 @@ The complete index definition is in
 the OpenSearch REST API:
 
 ```sh
-curl --fail \
+curl --fail-with-body \
   --request PUT 'http://localhost:9200/tickets-v1' \
   --header 'Content-Type: application/json' \
   --data-binary '@mappings/tickets-v1.json'
@@ -185,21 +185,21 @@ default.
 Confirm that the index exists but still contains zero documents:
 
 ```sh
-curl --fail 'http://localhost:9200/_cat/indices/tickets-v1?v'
+curl --fail-with-body 'http://localhost:9200/_cat/indices/tickets-v1?v'
 ```
 
 Inspect the mapping returned by OpenSearch rather than only trusting the request
 file:
 
 ```sh
-curl --fail 'http://localhost:9200/tickets-v1/_mapping?pretty'
+curl --fail-with-body 'http://localhost:9200/tickets-v1/_mapping?pretty'
 ```
 
 If you want to repeat only Increment 2, remove this disposable index and run the
 create request again:
 
 ```sh
-curl --fail --request DELETE 'http://localhost:9200/tickets-v1'
+curl --fail-with-body --request DELETE 'http://localhost:9200/tickets-v1'
 ```
 
 ### Field choices
@@ -317,7 +317,7 @@ and reduces indexing throughput.
 The mapping has not changed. Inspect it again before running the queries:
 
 ```sh
-curl --fail 'http://localhost:9200/tickets-v1/_mapping?pretty'
+curl --fail-with-body 'http://localhost:9200/tickets-v1/_mapping?pretty'
 ```
 
 Notice that `title` is `text`, while `status` is `keyword`. The script in
@@ -445,7 +445,7 @@ independently inspectable and avoids mutating the previous exercise implicitly.
 Create the index:
 
 ```sh
-curl --fail \
+curl --fail-with-body \
   --request PUT 'http://localhost:9200/tickets-v2' \
   --header 'Content-Type: application/json' \
   --data-binary '@mappings/tickets-v2.json'
@@ -454,8 +454,8 @@ curl --fail \
 Inspect its mapping and compare it with `tickets-v1`:
 
 ```sh
-curl --fail 'http://localhost:9200/tickets-v2/_mapping?pretty'
-curl --fail 'http://localhost:9200/tickets-v1/_mapping?pretty'
+curl --fail-with-body 'http://localhost:9200/tickets-v2/_mapping?pretty'
+curl --fail-with-body 'http://localhost:9200/tickets-v1/_mapping?pretty'
 ```
 
 The returned mapping may omit the explicit `"type": "object"` from `service`.
@@ -525,7 +525,7 @@ indexes makes the behavioral difference directly observable.
 Create the normal-object index:
 
 ```sh
-curl --fail \
+curl --fail-with-body \
   --request PUT 'http://localhost:9200/tickets-v3' \
   --header 'Content-Type: application/json' \
   --data-binary '@mappings/tickets-v3.json'
@@ -552,7 +552,7 @@ event. A normal object array does not preserve that association for querying.
 Now create the nested index:
 
 ```sh
-curl --fail \
+curl --fail-with-body \
   --request PUT 'http://localhost:9200/tickets-v4' \
   --header 'Content-Type: application/json' \
   --data-binary '@mappings/tickets-v4.json'
@@ -574,6 +574,147 @@ internally indexed documents and requires nested-aware queries, aggregations,
 and sorting. Use a normal object when cross-property association is irrelevant;
 use `nested` when predicates on several properties must apply to the same array
 element.
+
+## 7. Inspect existing state before changing it
+
+This increment makes no mapping or data changes. The aim is to inspect the
+actual index before deciding whether a proposed change can be applied in place.
+The mapping file in the repository describes the intended starting state, but
+OpenSearch is the authority for the state that currently exists.
+
+Make sure the local node is running, then list the indexes rather than assuming
+that `tickets-v1` exists:
+
+```sh
+curl --fail-with-body 'http://localhost:9200/_cat/indices?v'
+```
+
+If `tickets-v1` is absent, create it with the Increment 2 command. Its document
+count may legitimately be zero, one, or four depending on which earlier scripts
+you have run.
+
+### Inspect `tickets-v1`
+
+Inspect the live mapping:
+
+```sh
+curl --fail-with-body 'http://localhost:9200/tickets-v1/_mapping?pretty'
+```
+
+Compare that response with [`mappings/tickets-v1.json`](mappings/tickets-v1.json).
+The expected fields are `customerId` (`keyword`), `title` (`text`), `status`
+(`keyword`), `dueDate` (`date`), and `responseTimeMinutes` (`integer`), with
+dynamic mapping set to `strict`. Comparing the file and the live response can
+expose manual changes, a stale local index, or a deployment that did not apply
+the intended definition.
+
+Inspect the index settings:
+
+```sh
+curl --fail-with-body \
+  'http://localhost:9200/tickets-v1/_settings?flat_settings=true&pretty'
+```
+
+The response includes the explicitly chosen one primary shard and zero
+replicas, together with metadata such as the index creation version and UUID.
+Settings are separate from mappings: settings configure index behavior and
+physical characteristics, while mappings define how fields are indexed.
+
+Ask the Count API for the number of current top-level ticket documents:
+
+```sh
+curl --fail-with-body 'http://localhost:9200/tickets-v1/_count?pretty'
+```
+
+This is preferable to treating the `_cat/indices` `docs.count` column as an
+exact application-level row count. Cat APIs are intended for human inspection,
+and Lucene-level counts can be affected by internal documents (for example,
+nested values) and refresh timing.
+
+Finally, inspect a small sample of stored documents:
+
+```sh
+curl --fail-with-body \
+  --request GET 'http://localhost:9200/tickets-v1/_search?pretty' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "size": 3,
+    "query": {
+      "match_all": {}
+    }
+  }'
+```
+
+Each hit shows metadata such as `_index`, `_id`, and `_score`, plus the stored
+ticket JSON in `_source`. A sample helps reveal real shapes and values, but it
+does not prove that every document conforms to an application-level invariant.
+Use aggregations or a full scan when a migration decision depends on all data.
+
+### Before changing an OpenSearch index
+
+1. **What index exists?** Inspect the cluster, including the exact physical
+   index name; do not infer deployed state only from repository files.
+2. **What mapping does it currently have?** Read the live mapping and compare
+   field types, analyzers, object structures, and dynamic-mapping rules with the
+   proposed definition.
+3. **What data is already indexed?** Check the document count and representative
+   documents, then use a complete validation when the proposed change depends
+   on existing values.
+4. **Which applications read from it?** In this repository,
+   [`src/index-ticket.ts`](src/index-ticket.ts) retrieves a ticket by `_id`, and
+   [`src/search-tickets.ts`](src/search-tickets.ts) runs searches against
+   `tickets-v1`.
+5. **Which applications write to it?** Both of those scripts index documents
+   directly into `tickets-v1`. In a real system, also inspect deployed services,
+   scheduled jobs, ingestion pipelines, and other clients that may not live in
+   the same repository.
+6. **Is the proposed change compatible with the existing mapping?** Consider
+   both whether OpenSearch accepts the mapping update and whether every current
+   reader, writer, query, and existing document remains semantically correct.
+
+Repository search is a useful starting point for finding direct dependencies:
+
+```sh
+rg -n 'tickets-v1' src package.json
+```
+
+It is not a complete inventory of a shared index. Runtime configuration,
+aliases, or clients in other repositories can hide the physical index name, so
+production discovery also needs operational evidence such as deployment
+configuration and index-access metrics.
+
+### Why this is not an empty-database migration
+
+A common relational workflow starts an empty database and applies an ordered
+series of schema migrations until it reaches the current schema. That is useful
+for testing reproducibility, but it does not by itself model an OpenSearch
+change to a populated index:
+
+```text
+existing mapping + indexed search structures + existing documents
+                           + active readers and writers
+                                      ↓
+                         migration compatibility decision
+```
+
+An OpenSearch mapping controls the search representation built when each field
+is indexed. Adding certain fields is compatible, but an existing field's type
+or analyzer generally cannot be replaced in place because its already-built
+terms and other structures do not get reinterpreted. Such a change normally
+needs a new index with the desired mapping and a reindex of `_source`, followed
+by coordinated traffic switching. Later increments exercise that process.
+
+The closest SQL analogy is altering a populated table while applications are
+using it, not merely initializing an empty database. Relational databases can
+support many in-place `ALTER TABLE` operations and may update or validate rows
+as part of a migration. Those operations still have compatibility, locking,
+rewrite, and deployment concerns, depending on the database and change.
+OpenSearch has different constraints: its mapping is tied directly to
+distributed search structures, and many incompatible changes require building
+a separate index rather than altering the existing one.
+
+No schema update is made in this increment. The next increment can use this
+inspection baseline to demonstrate a compatible additive mapping change.
 
 ## Stop or reset the lab
 
