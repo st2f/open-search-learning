@@ -13,7 +13,7 @@ type Ticket = {
 };
 
 const client = new Client({ node: "http://localhost:9200" });
-const indexName = "tickets-v2";
+const indexName = "tickets-with-service";
 
 const tickets: Array<{ id: string; document: Ticket }> = [
   {
@@ -93,4 +93,3 @@ try {
 } finally {
   client.close();
 }
-

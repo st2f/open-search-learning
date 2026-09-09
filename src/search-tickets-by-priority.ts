@@ -15,7 +15,7 @@ type SearchHit<TDocument> = {
 };
 
 const client = new Client({ node: "http://localhost:9200" });
-const indexName = "tickets-v1";
+const indexName = "tickets-legacy";
 const ticketIds = ["ticket-5", "ticket-6"];
 
 const tickets: Array<{ id: string; document: Ticket }> = [

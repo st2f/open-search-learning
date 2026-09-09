@@ -9,7 +9,7 @@ type Ticket = {
 };
 
 const client = new Client({ node: "http://localhost:9200" });
-const indexName = "tickets-v1";
+const indexName = "tickets-legacy";
 
 const tickets: Array<{ id: string; document: Ticket }> = [
   {

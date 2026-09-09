@@ -1,7 +1,7 @@
 {
   "properties": {
     "responseTimeMinutes": {
-      "type": "keyword"
+      "type": "float"
     }
   }
 }

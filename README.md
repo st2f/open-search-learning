@@ -15,8 +15,8 @@ Each section introduces one small, inspectable change so the effect on OpenSearc
 7. [Inspect existing state before changing it](#7-inspect-existing-state-before-changing-it)
 8. [Make a compatible mapping change](#8-make-a-compatible-mapping-change)
 9. [Attempt an incompatible mapping change](#9-attempt-an-incompatible-mapping-change)
-10. Create `tickets-v2`
-11. Reindex v1 into v2
+10. [Create the replacement index](#10-create-the-replacement-index)
+11. Reindex the legacy index into the new index
 12. Introduce an alias
 13. Perform an alias-based migration
 14. Understand reads and writes during migration
@@ -30,6 +30,29 @@ Each section introduces one small, inspectable change so the effect on OpenSearc
 22. Safe test cleanup and isolation
 23. Optional: index templates
 24. Final migration exercise
+
+## Replaying the increments
+
+Repetition is part of this lab. Read-only requests can always be rerun, and the
+TypeScript examples use stable document IDs so they replace their own example
+documents instead of accumulating duplicates.
+
+Index creation is intentionally different: OpenSearch refuses to create an
+index whose name already exists. Each index-creation increment therefore gives
+an exact `DELETE` command for restoring that exercise to a clean state. These
+commands name only disposable lab indexes; never replace them with a wildcard.
+
+The exercises have these state boundaries:
+
+| Increments | Indexes | Replay behavior |
+| ---------- | ------- | --------------- |
+| 2–4, 7–10 | `tickets-legacy`, then `tickets-new` | This is one evolving migration sequence. Resetting `tickets-legacy` means replaying its later mapping and data steps in order. |
+| 5 | `tickets-with-service` | Independent; it can be reset without affecting the migration sequence. |
+| 6 | `tickets-v3`, `tickets-v4` | Independent; both can be reset and compared again. |
+
+To reset every exercise, use `docker compose down` and then start the node
+again. This repository has no persistent OpenSearch volume, so that removes all
+lab indexes and lets you replay from Increment 1.
 
 ## 1. Run one local OpenSearch node
 
@@ -139,7 +162,7 @@ structures. Those differences become concrete in later increments.
 
 ```txt
 cluster
-└── index: tickets-v1
+└── index: tickets-legacy
     ├── document: ticket-1
     ├── document: ticket-2
     └── mapping: field definitions
@@ -161,20 +184,31 @@ A **mapping** defines how document fields are indexed: their names, types, and
 type-specific behavior. It is similar to part of a database schema, but it
 primarily describes search and indexing behavior.
 
-### Create `tickets-v1`
+### Create `tickets-legacy`
 
-The complete index definition is in
-[`mappings/tickets-v1.json`](mappings/tickets-v1.json). Create it directly with
-the OpenSearch REST API:
+If you are replaying Increment 2, reset its disposable index first:
 
 ```sh
 curl --fail-with-body \
-  --request PUT 'http://localhost:9200/tickets-v1' \
-  --header 'Content-Type: application/json' \
-  --data-binary '@mappings/tickets-v1.json'
+  --request DELETE \
+  'http://localhost:9200/tickets-legacy?ignore_unavailable=true'
 ```
 
-`PUT /tickets-v1` creates the named index. The request includes both its
+This also resets the shared state used by Increments 3, 4, and 7 onward. Replay
+those increments in order when you want to rebuild the migration sequence.
+
+The complete index definition is in
+[`mappings/tickets-legacy.json`](mappings/tickets-legacy.json). Create it
+directly with the OpenSearch REST API:
+
+```sh
+curl --fail-with-body \
+  --request PUT 'http://localhost:9200/tickets-legacy' \
+  --header 'Content-Type: application/json' \
+  --data-binary '@mappings/tickets-legacy.json'
+```
+
+`PUT /tickets-legacy` creates the named index. The request includes both its
 settings and mapping; it does not index a document.
 
 This disposable one-node lab uses one primary shard and zero replicas. Zero
@@ -185,21 +219,14 @@ default.
 Confirm that the index exists but still contains zero documents:
 
 ```sh
-curl --fail-with-body 'http://localhost:9200/_cat/indices/tickets-v1?v'
+curl --fail-with-body 'http://localhost:9200/_cat/indices/tickets-legacy?v'
 ```
 
 Inspect the mapping returned by OpenSearch rather than only trusting the request
 file:
 
 ```sh
-curl --fail-with-body 'http://localhost:9200/tickets-v1/_mapping?pretty'
-```
-
-If you want to repeat only Increment 2, remove this disposable index and run the
-create request again:
-
-```sh
-curl --fail-with-body --request DELETE 'http://localhost:9200/tickets-v1'
+curl --fail-with-body 'http://localhost:9200/tickets-legacy/_mapping?pretty'
 ```
 
 ### Field choices
@@ -251,8 +278,8 @@ lab requires Node.js 24, which can run the erasable TypeScript syntax used here
 without a separate runtime such as `tsx` or `ts-node`. Node strips the type
 annotations before execution; it does not perform TypeScript type checking.
 
-Make sure OpenSearch is running and that `tickets-v1` has been created using the
-Increment 2 command. Then run:
+Make sure OpenSearch is running and that `tickets-legacy` has been created
+using the Increment 2 command. Then run:
 
 ```sh
 npm run ticket
@@ -266,7 +293,7 @@ TypeScript
   ↓
 OpenSearch JavaScript client
   ↓
-tickets-v1
+tickets-legacy
 ```
 
 1. `client.index(...)` sends one ticket document with the explicit `_id`
@@ -283,7 +310,7 @@ the TypeScript type are separate definitions that currently agree.
 **Indexing** validates the supplied values against the mapping and updates the
 index's internal search structures. The document's `_id` is metadata, so it is
 passed separately from the document body. An `_id` is unique only within its
-index; `tickets-v1` plus `ticket-1` identifies this document.
+index; `tickets-legacy` plus `ticket-1` identifies this document.
 
 The basic write operations have different intentions:
 
@@ -317,7 +344,7 @@ and reduces indexing throughput.
 The mapping has not changed. Inspect it again before running the queries:
 
 ```sh
-curl --fail-with-body 'http://localhost:9200/tickets-v1/_mapping?pretty'
+curl --fail-with-body 'http://localhost:9200/tickets-legacy/_mapping?pretty'
 ```
 
 Notice that `title` is `text`, while `status` is `keyword`. The script in
@@ -436,26 +463,38 @@ Tickets now include a service object:
 }
 ```
 
-This increment uses a new disposable index, `tickets-v2`, whose complete mapping
-is in [`mappings/tickets-v2.json`](mappings/tickets-v2.json). Adding an object
-field is a supported additive mapping change, so a new index is not technically
-required here. Keeping `tickets-v1` unchanged makes the two learning states
-independently inspectable and avoids mutating the previous exercise implicitly.
+This increment uses a new disposable index, `tickets-with-service`, whose
+complete mapping is in
+[`mappings/tickets-with-service.json`](mappings/tickets-with-service.json).
+Adding an object field is a supported additive mapping change, so a new index is
+not technically required here. Keeping `tickets-legacy` unchanged makes the two
+learning states independently inspectable and avoids mutating the previous
+exercise implicitly. Its descriptive name also separates it from the migration
+indexes.
 
 Create the index:
 
 ```sh
 curl --fail-with-body \
-  --request PUT 'http://localhost:9200/tickets-v2' \
-  --header 'Content-Type: application/json' \
-  --data-binary '@mappings/tickets-v2.json'
+  --request DELETE \
+  'http://localhost:9200/tickets-with-service?ignore_unavailable=true'
 ```
 
-Inspect its mapping and compare it with `tickets-v1`:
+That scoped reset makes the following creation request replayable without
+touching the other exercises:
 
 ```sh
-curl --fail-with-body 'http://localhost:9200/tickets-v2/_mapping?pretty'
-curl --fail-with-body 'http://localhost:9200/tickets-v1/_mapping?pretty'
+curl --fail-with-body \
+  --request PUT 'http://localhost:9200/tickets-with-service' \
+  --header 'Content-Type: application/json' \
+  --data-binary '@mappings/tickets-with-service.json'
+```
+
+Inspect its mapping and compare it with `tickets-legacy`:
+
+```sh
+curl --fail-with-body 'http://localhost:9200/tickets-with-service/_mapping?pretty'
+curl --fail-with-body 'http://localhost:9200/tickets-legacy/_mapping?pretty'
 ```
 
 The returned mapping may omit the explicit `"type": "object"` from `service`.
@@ -522,6 +561,14 @@ This increment uses the same event history in two indexes. `tickets-v3` maps
 `events` as a normal `object`; `tickets-v4` maps it as `nested`. Keeping both
 indexes makes the behavioral difference directly observable.
 
+Reset both disposable indexes when replaying this comparison:
+
+```sh
+curl --fail-with-body \
+  --request DELETE \
+  'http://localhost:9200/tickets-v3,tickets-v4?ignore_unavailable=true'
+```
+
 Create the normal-object index:
 
 ```sh
@@ -583,26 +630,27 @@ The mapping file in the repository describes the intended starting state, but
 OpenSearch is the authority for the state that currently exists.
 
 Make sure the local node is running, then list the indexes rather than assuming
-that `tickets-v1` exists:
+that `tickets-legacy` exists:
 
 ```sh
 curl --fail-with-body 'http://localhost:9200/_cat/indices?v'
 ```
 
-If `tickets-v1` is absent, create it with the Increment 2 command. Its document
-count may legitimately be zero, one, or four depending on which earlier scripts
-you have run.
+If `tickets-legacy` is absent, create it with the Increment 2 command. Its
+document count may legitimately be zero, one, or four depending on which
+earlier scripts you have run.
 
-### Inspect `tickets-v1`
+### Inspect `tickets-legacy`
 
 Inspect the live mapping:
 
 ```sh
-curl --fail-with-body 'http://localhost:9200/tickets-v1/_mapping?pretty'
+curl --fail-with-body 'http://localhost:9200/tickets-legacy/_mapping?pretty'
 ```
 
-Compare that response with [`mappings/tickets-v1.json`](mappings/tickets-v1.json).
-The expected fields are `customerId` (`keyword`), `title` (`text`), `status`
+Compare that response with
+[`mappings/tickets-legacy.json`](mappings/tickets-legacy.json). The expected
+fields are `customerId` (`keyword`), `title` (`text`), `status`
 (`keyword`), `dueDate` (`date`), and `responseTimeMinutes` (`integer`), with
 dynamic mapping set to `strict`. Comparing the file and the live response can
 expose manual changes, a stale local index, or a deployment that did not apply
@@ -612,7 +660,7 @@ Inspect the index settings:
 
 ```sh
 curl --fail-with-body \
-  'http://localhost:9200/tickets-v1/_settings?flat_settings=true&pretty'
+  'http://localhost:9200/tickets-legacy/_settings?flat_settings=true&pretty'
 ```
 
 The response includes the explicitly chosen one primary shard and zero
@@ -623,7 +671,7 @@ physical characteristics, while mappings define how fields are indexed.
 Ask the Count API for the number of current top-level ticket documents:
 
 ```sh
-curl --fail-with-body 'http://localhost:9200/tickets-v1/_count?pretty'
+curl --fail-with-body 'http://localhost:9200/tickets-legacy/_count?pretty'
 ```
 
 This is preferable to treating the `_cat/indices` `docs.count` column as an
@@ -635,7 +683,7 @@ Finally, inspect a small sample of stored documents:
 
 ```sh
 curl --fail-with-body \
-  --request GET 'http://localhost:9200/tickets-v1/_search?pretty' \
+  --request GET 'http://localhost:9200/tickets-legacy/_search?pretty' \
   --header 'Content-Type: application/json' \
   --data '{
     "size": 3,
@@ -663,11 +711,11 @@ Use aggregations or a full scan when a migration decision depends on all data.
 4. **Which applications read from it?** In this repository,
    [`src/index-ticket.ts`](src/index-ticket.ts) retrieves a ticket by `_id`, and
    [`src/search-tickets.ts`](src/search-tickets.ts) runs searches against
-   `tickets-v1`.
+   `tickets-legacy`.
 5. **Which applications write to it?** Both of those scripts index documents
-   directly into `tickets-v1`. In a real system, also inspect deployed services,
-   scheduled jobs, ingestion pipelines, and other clients that may not live in
-   the same repository.
+   directly into `tickets-legacy`. In a real system, also inspect deployed
+   services, scheduled jobs, ingestion pipelines, and other clients that may
+   not live in the same repository.
 6. **Is the proposed change compatible with the existing mapping?** Consider
    both whether OpenSearch accepts the mapping update and whether every current
    reader, writer, query, and existing document remains semantically correct.
@@ -675,7 +723,7 @@ Use aggregations or a full scan when a migration decision depends on all data.
 Repository search is a useful starting point for finding direct dependencies:
 
 ```sh
-rg -n 'tickets-v1' src package.json
+rg -n 'tickets-legacy' src package.json
 ```
 
 It is not a complete inventory of a shared index. Runtime configuration,
@@ -718,7 +766,7 @@ inspection baseline to demonstrate a compatible additive mapping change.
 
 ## 8. Make a compatible mapping change
 
-This increment adds `priority` to the existing `tickets-v1` mapping. It does
+This increment adds `priority` to the existing `tickets-legacy` mapping. It does
 not replace the index or modify the original Increment 2 mapping file; the
 separate update file preserves the before-and-after steps of the exercise.
 
@@ -726,11 +774,12 @@ First inspect the live mapping and confirm that it does not already contain
 `priority`:
 
 ```sh
-curl --fail-with-body 'http://localhost:9200/tickets-v1/_mapping?pretty'
+curl --fail-with-body 'http://localhost:9200/tickets-legacy/_mapping?pretty'
 ```
 
 The mapping update body is in
-[`mappings/tickets-v1-add-priority.json`](mappings/tickets-v1-add-priority.json):
+[`mappings/tickets-legacy-add-priority.json`](mappings/tickets-legacy-add-priority.json)
+contains:
 
 ```json
 {
@@ -746,18 +795,19 @@ Apply it to the existing index:
 
 ```sh
 curl --fail-with-body \
-  --request PUT 'http://localhost:9200/tickets-v1/_mapping' \
+  --request PUT 'http://localhost:9200/tickets-legacy/_mapping' \
   --header 'Content-Type: application/json' \
-  --data-binary '@mappings/tickets-v1-add-priority.json'
+  --data-binary '@mappings/tickets-legacy-add-priority.json'
 ```
 
-`PUT /tickets-v1/_mapping` updates the mapping of that index; it does not create
-a new index. This particular request is safe to repeat because it declares the
-same type for the same field. Inspect the live mapping again and verify that
-`priority` is now a `keyword` while every earlier field is unchanged:
+`PUT /tickets-legacy/_mapping` updates the mapping of that index; it does not
+create a new index. This particular request is safe to repeat because it
+declares the same type for the same field. Inspect the live mapping again and
+verify that `priority` is now a `keyword` while every earlier field is
+unchanged:
 
 ```sh
-curl --fail-with-body 'http://localhost:9200/tickets-v1/_mapping?pretty'
+curl --fail-with-body 'http://localhost:9200/tickets-legacy/_mapping?pretty'
 ```
 
 `keyword` is appropriate because priority is a structured exact value used for
@@ -820,21 +870,21 @@ that an additive mapping update does not rewrite existing data.
 
 ## 9. Attempt an incompatible mapping change
 
-This increment intentionally tries to change the existing
-`responseTimeMinutes` field from `integer` to `keyword`. OpenSearch rejects the
-request. Leave `tickets-v1` in place after the failure: inspecting its unchanged
-state is part of the exercise, and creating a replacement index belongs to the
-next increment.
+Suppose response times must now support fractions of a minute, such as `2.5`.
+That gives us a concrete reason to change `responseTimeMinutes` from `integer`
+to `float`. OpenSearch rejects this change on the existing index. Leave
+`tickets-legacy` in place after the failure; the next increment creates a
+separate replacement.
 
 First confirm the live field type and inspect a document that contains the
 field:
 
 ```sh
-curl --fail-with-body 'http://localhost:9200/tickets-v1/_mapping?pretty'
-curl --fail-with-body 'http://localhost:9200/tickets-v1/_count?pretty'
+curl --fail-with-body 'http://localhost:9200/tickets-legacy/_mapping?pretty'
+curl --fail-with-body 'http://localhost:9200/tickets-legacy/_count?pretty'
 
 curl --fail-with-body \
-  'http://localhost:9200/tickets-v1/_search?pretty' \
+  'http://localhost:9200/tickets-legacy/_search?pretty' \
   --header 'Content-Type: application/json' \
   --data '{
     "size": 1,
@@ -846,15 +896,15 @@ curl --fail-with-body \
   }'
 ```
 
-The mapping should report `"type": "integer"`; `_source` shows a JSON number
-such as `30`. The rejected update is deliberately kept in
-[`mappings/tickets-v1-change-response-time-to-keyword.json`](mappings/tickets-v1-change-response-time-to-keyword.json):
+The mapping should report `"type": "integer"`; `_source` shows a whole number
+such as `30`. The rejected update is in
+[`mappings/tickets-legacy-change-response-time-to-float.json`](mappings/tickets-legacy-change-response-time-to-float.json):
 
 ```json
 {
   "properties": {
     "responseTimeMinutes": {
-      "type": "keyword"
+      "type": "float"
     }
   }
 }
@@ -864,9 +914,9 @@ Attempt to apply it to the existing index:
 
 ```sh
 curl --fail-with-body \
-  --request PUT 'http://localhost:9200/tickets-v1/_mapping' \
+  --request PUT 'http://localhost:9200/tickets-legacy/_mapping' \
   --header 'Content-Type: application/json' \
-  --data-binary '@mappings/tickets-v1-change-response-time-to-keyword.json'
+  --data-binary '@mappings/tickets-legacy-change-response-time-to-float.json'
 ```
 
 This command is expected to fail. With the pinned OpenSearch version, the
@@ -874,7 +924,7 @@ response is HTTP `400 Bad Request` and its essential cause is:
 
 ```text
 illegal_argument_exception:
-mapper [responseTimeMinutes] cannot be changed from type [integer] to [keyword]
+mapper [responseTimeMinutes] cannot be changed from type [integer] to [float]
 ```
 
 The exact JSON envelope may contain repeated `root_cause` and `caused_by`
@@ -887,20 +937,11 @@ nor sampled document.
 
 ### Why OpenSearch refuses the change
 
-The mapping type determines which search representation OpenSearch builds when
-a value is indexed. An `integer` is encoded for numeric equality, range queries,
-and numeric sorting; a `keyword` is indexed as an exact string value. Changing
-the mapping label would not convert the numeric structures that already exist
-in the index. It would make one field name claim two incompatible meanings, so
-OpenSearch rejects the update even if the index currently has no documents.
-The field mapping itself is already established.
-
-Existing data matters when choosing the eventual migration, even though it is
-not the condition that triggers this rejection. A new index can define the
-field as `keyword`, but every old `_source` value must then be accepted or
-transformed under that mapping during reindexing. Readers and writers must also
-be checked because numeric range and sort behavior would become lexicographic
-string behavior. For example, as keywords, `"100"` sorts before `"30"`.
+The mapping type determines how values are indexed. Changing its label would
+not rebuild the structures already created for that field, so OpenSearch
+rejects the update. Existing whole-number values will be valid floats in the
+replacement index, but they still have to be read from `_source` and indexed
+again under the new mapping.
 
 Some relational databases support an operation such as `ALTER TABLE ... ALTER
 COLUMN ... TYPE`, potentially validating or rewriting stored rows and indexes
@@ -910,6 +951,53 @@ field-type change. The usual pattern is to create a new index with the desired
 mapping, reindex or transform the old `_source` documents, validate the result,
 and then switch traffic. Do not do that yet; Increment 10 introduces the new
 index explicitly.
+
+## 10. Create the replacement index
+
+For this migration, think in roles rather than version numbers:
+
+```text
+legacy: tickets-legacy   new: tickets-new
+integer response time    float response time
+existing documents       empty
+```
+
+`tickets-legacy` stays populated and unchanged. The complete replacement
+mapping is in [`mappings/tickets-new.json`](mappings/tickets-new.json).
+
+Reset and create only the new index:
+
+```sh
+curl --fail-with-body \
+  --request DELETE \
+  'http://localhost:9200/tickets-new?ignore_unavailable=true'
+
+curl --fail-with-body \
+  --request PUT 'http://localhost:9200/tickets-new' \
+  --header 'Content-Type: application/json' \
+  --data-binary '@mappings/tickets-new.json'
+```
+
+Inspect the old and new states:
+
+```sh
+curl --fail-with-body \
+  'http://localhost:9200/tickets-legacy,tickets-new/_mapping?pretty'
+
+curl --fail-with-body 'http://localhost:9200/tickets-legacy/_count?pretty'
+curl --fail-with-body 'http://localhost:9200/tickets-new/_count?pretty'
+```
+
+The legacy index still contains its documents and maps
+`responseTimeMinutes` as `integer`. The new index maps it as `float` and has no
+documents yet.
+
+The names are ordinary physical index names; `legacy` and `new` describe their
+roles in this exercise. Keeping the legacy index makes comparison and rollback
+possible. Once writes go only to the new index, rollback needs extra care
+because those writes are not present in the legacy index.
+
+Do not copy data yet. That is Increment 11.
 
 ## Stop or reset the lab
 

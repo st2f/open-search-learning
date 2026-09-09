@@ -96,7 +96,7 @@ At this point there should be no application-specific index.
 
 Create an index named:
 
-`tickets-v1`
+`tickets-legacy`
 
 Use an explicit mapping for a deliberately small document such as:
 
@@ -149,7 +149,7 @@ TypeScript
   ↓
 OpenSearch client
   ↓
-tickets-v1
+tickets-legacy
 ```
 
 Explain:
@@ -287,7 +287,7 @@ Do not proceed until I can explain why nested exists.
 
 Before making any schema change, practice inspection.
 
-Given `tickets-v1`, inspect:
+Given `tickets-legacy`, inspect:
 
 - mapping
 - settings
@@ -351,11 +351,9 @@ Do not reindex yet.
 
 Suppose `responseTimeMinutes` is currently mapped as a numeric type.
 
-Attempt to change it to:
+Suppose fractional response times are now required. Attempt to change it to:
 
-`keyword`
-
-or another clearly incompatible type.
+`float`
 
 Do this intentionally and observe OpenSearch reject it.
 
@@ -365,7 +363,6 @@ Explain:
 
 - why the mapping cannot simply be changed
 - why already-indexed data matters
-- why changing application TypeScript types does not change the OpenSearch mapping
 - why this differs from some relational schema migrations
 
 Record the actual failure in the README in summarized form.
@@ -374,14 +371,14 @@ The goal is to encounter the constraint directly rather than merely reading abou
 
 ---
 
-## Increment 10 — Create `tickets-v2`
+## Increment 10 — Create the Replacement Index
 
-Create `tickets-v2` with the desired new mapping.
+Create `tickets-new` with the desired new mapping.
 
-Do not delete `tickets-v1`.
+Do not delete `tickets-legacy`.
 
 ```text
-tickets-v1             tickets-v2
+tickets-legacy         tickets-new
 existing documents     new mapping
                        initially empty
 ```
@@ -391,7 +388,7 @@ Inspect both indexes side by side.
 Explain:
 
 - physical index names
-- schema/version naming
+- role-based names in this lab versus versioned production names
 - why keeping the old index temporarily is useful
 - rollback possibilities
 
@@ -399,22 +396,22 @@ Do not copy data yet.
 
 ---
 
-## Increment 11 — Reindex v1 Into v2
+## Increment 11 — Reindex Legacy Into New
 
 Use the OpenSearch Reindex API:
 
 ```text
-tickets-v1
+tickets-legacy
   ↓
 reindex
   ↓
-tickets-v2
+tickets-new
 ```
 
 Before reindexing:
 
-- inspect document count in v1
-- inspect v2 mapping
+- inspect document count in the legacy index
+- inspect the new mapping
 - confirm destination exists
 
 Run the reindex.
@@ -423,7 +420,7 @@ Then verify:
 
 - document count
 - sample documents
-- queries against v2
+- queries against the new index
 - resulting field behavior
 
 Explain:
@@ -435,7 +432,7 @@ Explain:
 - reindexing versus changing an index in place
 - why reindexing could be expensive on large datasets
 
-Do not delete v1.
+Do not delete the legacy index.
 
 ---
 
@@ -447,7 +444,7 @@ Create an alias:
 
 pointing to:
 
-`tickets-v1`
+`tickets-legacy`
 
 Change the TypeScript code so it uses:
 
@@ -455,14 +452,14 @@ Change the TypeScript code so it uses:
 
 rather than:
 
-`tickets-v1`
+`tickets-legacy`
 
 ```text
 Application
   ↓
 tickets ← alias
   ↓
-tickets-v1 ← physical index
+tickets-legacy ← physical index
 ```
 
 Verify reads through the alias.
@@ -474,7 +471,7 @@ Explain:
 - why applications can use stable logical names
 - how aliases help migrations
 
-Do not switch it to v2 yet.
+Do not switch it to the new index yet.
 
 ---
 
@@ -487,12 +484,12 @@ Application
   ↓
 tickets
   ↓
-tickets-v1
+tickets-legacy
 
-tickets-v2 (already populated)
+tickets-new (already populated)
 ```
 
-Switch the alias so that it points from v1 to v2.
+Switch the alias so that it points from the legacy index to the new index.
 
 Use the appropriate atomic alias update operation rather than separate unsafe remove/add steps.
 
@@ -503,17 +500,18 @@ Application
   ↓
 tickets
   ↓
-tickets-v2
+tickets-new
 ```
 
 Verify:
 
 - the application code did not change
-- queries now use v2
-- v1 still exists
+- queries now use the new index
+- the legacy index still exists
 - rollback is possible by changing the alias back
 
-Then perform a rollback to v1 once, verify it, and switch to v2 again.
+Then perform a rollback to the legacy index once, verify it, and switch to the
+new index again.
 
 Explain why alias switching can be safer than changing every caller to a new physical index name.
 
@@ -537,7 +535,7 @@ what happens to documents written during migration?
 
 Experiment with writing one document after the initial reindex.
 
-Observe whether it exists in v2.
+Observe whether it exists in the new index.
 
 Introduce the concept of a write alias if useful.
 
@@ -665,11 +663,11 @@ The test should NOT begin directly with the final index.
 
 Instead:
 
-1. Create v1.
+1. Create the legacy index.
 2. Install the old mapping.
 3. Insert old-format representative data.
 4. Execute the migration logic.
-5. Create/configure v2.
+5. Create/configure the new index.
 6. Reindex.
 7. Switch alias.
 8. Query through the alias.
@@ -701,7 +699,7 @@ Introduce one incompatible or incorrect assumption.
 
 Possible examples:
 
-- v1 contains a value incompatible with the v2 mapping
+- the legacy index contains a value incompatible with the new mapping
 - a field is missing
 - a field has an unexpected old representation
 - nested/object structure differs
@@ -854,7 +852,7 @@ Keep this optional if it is not relevant to the current work codebase.
 
 Start from:
 
-`tickets-v1`
+`tickets-legacy`
 
 with:
 
@@ -865,24 +863,24 @@ with:
 
 Target:
 
-`tickets-v2`
+`tickets-new`
 
 with one meaningful mapping change.
 
 ```text
 Inspect existing state
   ↓
-Create v2 mapping
+Create new mapping
   ↓
 Reindex existing documents
   ↓
-Validate v2
+Validate new index
   ↓
 Atomically switch alias
   ↓
 Run application integration tests
   ↓
-Keep v1 available for rollback
+Keep legacy index available for rollback
 ```
 
 Then answer, without looking at the implementation:
@@ -925,11 +923,11 @@ And this migration:
 ```text
               existing data
                    ↓
-             tickets-v1
+             tickets-legacy
                    ↓
                  reindex
                    ↓
-             tickets-v2
+             tickets-new
                    ↑
              new mapping
 
@@ -937,8 +935,8 @@ Application
   ↓
 tickets alias
   ↓
-v1 before migration
-v2 after atomic switch
+legacy before migration
+new after atomic switch
 ```
 
 And this integration test:
