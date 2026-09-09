@@ -14,7 +14,7 @@ Each section introduces one small, inspectable change so the effect on OpenSearc
 6. [Understand `object` versus `nested`](#6-understand-object-versus-nested)
 7. [Inspect existing state before changing it](#7-inspect-existing-state-before-changing-it)
 8. [Make a compatible mapping change](#8-make-a-compatible-mapping-change)
-9. Attempt an incompatible mapping change
+9. [Attempt an incompatible mapping change](#9-attempt-an-incompatible-mapping-change)
 10. Create `tickets-v2`
 11. Reindex v1 into v2
 12. Introduce an alias
@@ -817,6 +817,99 @@ Their `_source` can still distinguish `{}` from `{ "priority": null }`.
 
 Do not reindex for this increment. The unchanged older document is the evidence
 that an additive mapping update does not rewrite existing data.
+
+## 9. Attempt an incompatible mapping change
+
+This increment intentionally tries to change the existing
+`responseTimeMinutes` field from `integer` to `keyword`. OpenSearch rejects the
+request. Leave `tickets-v1` in place after the failure: inspecting its unchanged
+state is part of the exercise, and creating a replacement index belongs to the
+next increment.
+
+First confirm the live field type and inspect a document that contains the
+field:
+
+```sh
+curl --fail-with-body 'http://localhost:9200/tickets-v1/_mapping?pretty'
+curl --fail-with-body 'http://localhost:9200/tickets-v1/_count?pretty'
+
+curl --fail-with-body \
+  'http://localhost:9200/tickets-v1/_search?pretty' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "size": 1,
+    "query": {
+      "exists": {
+        "field": "responseTimeMinutes"
+      }
+    }
+  }'
+```
+
+The mapping should report `"type": "integer"`; `_source` shows a JSON number
+such as `30`. The rejected update is deliberately kept in
+[`mappings/tickets-v1-change-response-time-to-keyword.json`](mappings/tickets-v1-change-response-time-to-keyword.json):
+
+```json
+{
+  "properties": {
+    "responseTimeMinutes": {
+      "type": "keyword"
+    }
+  }
+}
+```
+
+Attempt to apply it to the existing index:
+
+```sh
+curl --fail-with-body \
+  --request PUT 'http://localhost:9200/tickets-v1/_mapping' \
+  --header 'Content-Type: application/json' \
+  --data-binary '@mappings/tickets-v1-change-response-time-to-keyword.json'
+```
+
+This command is expected to fail. With the pinned OpenSearch version, the
+response is HTTP `400 Bad Request` and its essential cause is:
+
+```text
+illegal_argument_exception:
+mapper [responseTimeMinutes] cannot be changed from type [integer] to [keyword]
+```
+
+The exact JSON envelope may contain repeated `root_cause` and `caused_by`
+details. `curl --fail-with-body` prints that useful error body and exits with a
+nonzero status, so the failure is observable both by a person and by a script.
+
+Run the same mapping, count, and sample-document inspections again. This
+confirms that the rejected request changed neither the mapping, document count,
+nor sampled document.
+
+### Why OpenSearch refuses the change
+
+The mapping type determines which search representation OpenSearch builds when
+a value is indexed. An `integer` is encoded for numeric equality, range queries,
+and numeric sorting; a `keyword` is indexed as an exact string value. Changing
+the mapping label would not convert the numeric structures that already exist
+in the index. It would make one field name claim two incompatible meanings, so
+OpenSearch rejects the update even if the index currently has no documents.
+The field mapping itself is already established.
+
+Existing data matters when choosing the eventual migration, even though it is
+not the condition that triggers this rejection. A new index can define the
+field as `keyword`, but every old `_source` value must then be accepted or
+transformed under that mapping during reindexing. Readers and writers must also
+be checked because numeric range and sort behavior would become lexicographic
+string behavior. For example, as keywords, `"100"` sorts before `"30"`.
+
+Some relational databases support an operation such as `ALTER TABLE ... ALTER
+COLUMN ... TYPE`, potentially validating or rewriting stored rows and indexes
+as one managed schema migration. Details, locking, and supported conversions
+vary by database. OpenSearch provides no equivalent in-place rewrite for this
+field-type change. The usual pattern is to create a new index with the desired
+mapping, reindex or transform the old `_source` documents, validate the result,
+and then switch traffic. Do not do that yet; Increment 10 introduces the new
+index explicitly.
 
 ## Stop or reset the lab
 
