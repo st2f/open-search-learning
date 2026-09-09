@@ -16,7 +16,7 @@ Each section introduces one small, inspectable change so the effect on OpenSearc
 8. [Make a compatible mapping change](#8-make-a-compatible-mapping-change)
 9. [Attempt an incompatible mapping change](#9-attempt-an-incompatible-mapping-change)
 10. [Create the replacement index](#10-create-the-replacement-index)
-11. Reindex the legacy index into the new index
+11. [Reindex the legacy index into the new index](#11-reindex-the-legacy-index-into-the-new-index)
 12. Introduce an alias
 13. Perform an alias-based migration
 14. Understand reads and writes during migration
@@ -998,6 +998,123 @@ possible. Once writes go only to the new index, rollback needs extra care
 because those writes are not present in the legacy index.
 
 Do not copy data yet. That is Increment 11.
+
+## 11. Reindex the legacy index into the new index
+
+Start with the state from Increment 10: `tickets-legacy` is populated and
+`tickets-new` exists with the `float` mapping but is empty.
+
+Confirm those preconditions:
+
+```sh
+curl --fail-with-body 'http://localhost:9200/tickets-legacy/_count?pretty'
+curl --fail-with-body 'http://localhost:9200/tickets-new/_count?pretty'
+curl --fail-with-body 'http://localhost:9200/tickets-new/_mapping?pretty'
+```
+
+Now ask OpenSearch to reindex every document:
+
+```sh
+curl --fail-with-body \
+  --request POST 'http://localhost:9200/_reindex?refresh=true&pretty' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "source": {
+      "index": "tickets-legacy"
+    },
+    "dest": {
+      "index": "tickets-new"
+    }
+  }'
+```
+
+On a clean destination, the response should show the source count in `total`
+and `created`, zero failures, and no version conflicts. Repeating the request
+uses the same document IDs, so documents are updated rather than duplicated.
+`refresh=true` makes the copied documents visible to the immediate verification
+queries. Replay Increment 10 first if you want to observe a clean reindex again.
+
+Compare counts and inspect the copied documents:
+
+```sh
+curl --fail-with-body 'http://localhost:9200/tickets-legacy/_count?pretty'
+curl --fail-with-body 'http://localhost:9200/tickets-new/_count?pretty'
+
+curl --fail-with-body \
+  'http://localhost:9200/tickets-new/_search?pretty' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "size": 3,
+    "query": {
+      "match_all": {}
+    }
+  }'
+```
+
+The `_source` values still look like the original JSON—for example,
+`responseTimeMinutes` may still be `30`. Reindex reads each legacy `_source`
+and sends it through the new mapping; it does not rewrite the stored JSON value
+from `30` to `30.0`. The destination nevertheless indexes that value as a
+`float`.
+
+The copied examples contain only whole numbers, so they do not demonstrate the
+reason for choosing `float`. Add one temporary document with a fractional
+response time:
+
+```sh
+curl --fail-with-body \
+  --request PUT \
+  'http://localhost:9200/tickets-new/_doc/fractional-check?refresh=wait_for' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "customerId": "mapping-check",
+    "title": "Fractional response-time check",
+    "status": "test",
+    "dueDate": "2026-09-21",
+    "responseTimeMinutes": 2.5
+  }'
+```
+
+Query the indexed value rather than merely reading it back from `_source`:
+
+```sh
+curl --fail-with-body \
+  'http://localhost:9200/tickets-new/_search?pretty' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "_source": false,
+    "fields": ["responseTimeMinutes"],
+    "query": {
+      "term": {
+        "responseTimeMinutes": 2.5
+      }
+    }
+  }'
+```
+
+The result contains `fractional-check` with a field value of `2.5`. That is
+direct evidence that the destination indexed and can exactly query the
+fractional value required by the new model.
+
+Remove the validation document so both indexes return to the same document
+count:
+
+```sh
+curl --fail-with-body \
+  --request DELETE \
+  'http://localhost:9200/tickets-new/_doc/fractional-check?refresh=true'
+
+curl --fail-with-body 'http://localhost:9200/tickets-new/_count?pretty'
+```
+
+The destination mapping had to be prepared first. Reindex copies documents,
+not the source mapping or index settings; allowing automatic index creation
+could produce inferred types instead of the mapping we intended. On a large
+index, reindex is substantial work because OpenSearch must read every source
+document and perform a new indexing write for every destination document.
+
+Keep `tickets-legacy`. The next increments use it to introduce an alias and to
+practice switching and rollback.
 
 ## Stop or reset the lab
 
