@@ -17,7 +17,7 @@ Each section introduces one small, inspectable change so the effect on OpenSearc
 9. [Attempt an incompatible mapping change](#9-attempt-an-incompatible-mapping-change)
 10. [Create the replacement index](#10-create-the-replacement-index)
 11. [Reindex the legacy index into the new index](#11-reindex-the-legacy-index-into-the-new-index)
-12. Introduce an alias
+12. [Introduce an alias](#12-introduce-an-alias)
 13. Perform an alias-based migration
 14. Understand reads and writes during migration
 15. Add a basic integration test against local OpenSearch
@@ -46,7 +46,7 @@ The exercises have these state boundaries:
 
 | Increments | Indexes | Replay behavior |
 | ---------- | ------- | --------------- |
-| 2–4, 7–10 | `tickets-legacy`, then `tickets-new` | This is one evolving migration sequence. Resetting `tickets-legacy` means replaying its later mapping and data steps in order. |
+| 2–4, 7–12 | `tickets-legacy`, `tickets-new`, then alias `tickets` | This is one evolving migration sequence. Resetting `tickets-legacy` means replaying its later mapping, data, reindex, and alias steps in order. |
 | 5 | `tickets-with-service` | Independent; it can be reset without affecting the migration sequence. |
 | 6 | `tickets-v3`, `tickets-v4` | Independent; both can be reset and compared again. |
 
@@ -1115,6 +1115,106 @@ document and perform a new indexing write for every destination document.
 
 Keep `tickets-legacy`. The next increments use it to introduce an alias and to
 practice switching and rollback.
+
+## 12. Introduce an alias
+
+Start with the state produced by Increment 11: `tickets-legacy` and
+`tickets-new` both exist and contain the copied documents, but no application
+alias is required yet. This increment creates the stable logical name
+`tickets` and points it at the legacy physical index:
+
+```text
+Application
+    ↓
+tickets (alias)
+    ↓
+tickets-legacy (physical index)
+
+tickets-new (physical index, not selected yet)
+```
+
+The replacement index stays populated but unused through the alias. Increment
+13 performs the switch; do not switch it in this increment.
+
+### Create or reset the alias
+
+Use one aliases request to establish the exact starting relationship:
+
+```sh
+curl --fail-with-body \
+  --request POST 'http://localhost:9200/_aliases' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "actions": [
+      {
+        "remove": {
+          "index": "tickets-new",
+          "alias": "tickets",
+          "must_exist": false
+        }
+      },
+      {
+        "add": {
+          "index": "tickets-legacy",
+          "alias": "tickets"
+        }
+      }
+    ]
+  }'
+```
+
+The narrowly scoped `remove` makes this command replayable after a later alias
+switch: if `tickets` points to `tickets-new`, that relationship is removed; if
+it does not, `must_exist: false` makes the action a no-op. The `add` then makes
+sure the alias points to `tickets-legacy`. Both actions are evaluated as one
+cluster-state update, so the reset does not expose an intermediate alias state.
+
+Inspect aliases and confirm the relationship rather than assuming the request
+had the intended effect:
+
+```sh
+curl --fail-with-body 'http://localhost:9200/_cat/aliases/tickets?v'
+curl --fail-with-body 'http://localhost:9200/_alias/tickets?pretty'
+```
+
+Both responses should identify `tickets-legacy` as the physical index behind
+`tickets`. The alias does not copy documents or create another set of search
+structures; it is cluster metadata that resolves a name to an existing index.
+
+### Read through the logical name
+
+Run the Increment 12 application example:
+
+```sh
+npm run ticket:alias
+```
+
+[`src/read-ticket-through-alias.ts`](src/read-ticket-through-alias.ts) asks for
+`ticket-1` from `tickets`; it contains no physical index name. The response
+prints `tickets-legacy` as the resolved `_index`, followed by the stored
+`_source`. This proves that the request used the alias while OpenSearch read the
+document from the underlying physical index.
+
+The earlier TypeScript files deliberately retain their physical names because
+they are runnable examples for Increments 3, 4, and 8, which precede alias
+creation. In an application being migrated, the equivalent change would be to
+replace its configured physical name with `tickets`. From this increment
+onward, the alias-facing script represents that application caller.
+
+### Physical indexes and stable logical names
+
+A **physical index** owns mappings, settings, shards, and documents. Here,
+`tickets-legacy` and `tickets-new` are two separate physical indexes with
+different mappings. An **alias** is another cluster-managed name that resolves
+to one or more indexes; here, `tickets` resolves to exactly one.
+
+The application can depend on the stable role-based name `tickets` while an
+operator chooses which physical index currently fulfils that role. A later
+migration can build and validate a replacement index without changing every
+caller. The alias can then be updated in one atomic operation, and the same
+application request resolves to the replacement. The alias is routing
+indirection, not migration by itself: data still has to be copied and verified,
+and concurrent writes require separate consideration in later increments.
 
 ## Stop or reset the lab
 

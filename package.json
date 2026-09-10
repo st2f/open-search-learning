@@ -8,6 +8,7 @@
     "search:events": "node src/search-tickets-by-events.ts",
     "search:events:nested": "node src/search-tickets-by-nested-events.ts",
     "search:priority": "node src/search-tickets-by-priority.ts",
+    "ticket:alias": "node src/read-ticket-through-alias.ts",
     "ticket": "node src/index-ticket.ts"
   },
   "engines": {
