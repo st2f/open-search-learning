@@ -19,7 +19,7 @@ Each section introduces one small, inspectable change so the effect on OpenSearc
 11. [Reindex the legacy index into the new index](#11-reindex-the-legacy-index-into-the-new-index)
 12. [Introduce an alias](#12-introduce-an-alias)
 13. [Perform an alias-based migration](#13-perform-an-alias-based-migration)
-14. Understand reads and writes during migration
+14. [Understand reads and writes during migration](#14-understand-reads-and-writes-during-migration)
 15. Add a basic integration test against local OpenSearch
 16. Run OpenSearch with Testcontainers
 17. Test the mapping, not just the application result
@@ -46,7 +46,7 @@ The exercises have these state boundaries:
 
 | Increments | Indexes                                               | Replay behavior                                                                                                                                 |
 | ---------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| 2–4, 7–13  | `tickets-legacy`, `tickets-new`, then alias `tickets` | This is one evolving migration sequence. Resetting `tickets-legacy` means replaying its later mapping, data, reindex, and alias steps in order. |
+| 2–4, 7–14  | `tickets-legacy`, `tickets-new`, then alias `tickets` | This is one evolving migration sequence. Resetting `tickets-legacy` means replaying its later mapping, data, reindex, and alias steps in order. |
 | 5          | `tickets-with-service`                                | Independent; it can be reset without affecting the migration sequence.                                                                          |
 | 6          | `tickets-v3`, `tickets-v4`                            | Independent; both can be reset and compared again.                                                                                              |
 
@@ -1397,6 +1397,172 @@ every caller: the routing decision is centralized and atomic, and rollback can
 use the same mechanism while the two indexes remain data-compatible. It does
 not remove the need to validate mappings, copied data, queries, and active
 writes before switching.
+
+## 14. Understand reads and writes during migration
+
+Increment 11 copied the documents that existed at reindex time. Now simulate a
+write that arrives afterward:
+
+```text
+reindex finishes → new write reaches legacy → alias switches
+                                            ↓
+                          write is absent from the new index
+```
+
+### Restore the experiment's starting state
+
+Remove only this increment's example ID from both indexes, then point the alias
+back to the legacy index:
+
+```sh
+curl --fail-with-body \
+  --request POST \
+  'http://localhost:9200/tickets-legacy,tickets-new/_delete_by_query?refresh=true&pretty' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "query": {
+      "ids": {
+        "values": ["ticket-after-reindex"]
+      }
+    }
+  }'
+
+curl --fail-with-body \
+  --request POST 'http://localhost:9200/_aliases' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "actions": [
+      {
+        "remove": {
+          "index": "tickets-new",
+          "alias": "tickets",
+          "must_exist": false
+        }
+      },
+      {
+        "add": {
+          "index": "tickets-legacy",
+          "alias": "tickets"
+        }
+      }
+    ]
+  }'
+```
+
+The delete-by-query is deliberately restricted to one stable ID, so the reset
+is safe to repeat.
+
+### Write after reindexing
+
+Write a new ticket through the application alias and verify:
+
+```sh
+curl --fail-with-body \
+  --request PUT \
+  'http://localhost:9200/tickets/_doc/ticket-after-reindex?refresh=wait_for&pretty' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "customerId": "customer-late",
+    "title": "Ticket created after reindex",
+    "status": "open",
+    "dueDate": "2026-09-22",
+    "responseTimeMinutes": 12,
+    "priority": "normal"
+  }'
+
+curl --fail-with-body \
+  'http://localhost:9200/tickets/_search?pretty' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "query": {
+      "ids": {
+        "values": ["ticket-after-reindex"]
+      }
+    }
+  }'
+```
+
+### Switch and observe the gap
+
+Perform the same atomic alias switch as Increment 13:
+
+```sh
+curl --fail-with-body \
+  --request POST 'http://localhost:9200/_aliases' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "actions": [
+      {
+        "remove": {
+          "index": "tickets-legacy",
+          "alias": "tickets",
+          "must_exist": true
+        }
+      },
+      {
+        "add": {
+          "index": "tickets-new",
+          "alias": "tickets"
+        }
+      }
+    ]
+  }'
+
+curl --fail-with-body \
+  'http://localhost:9200/tickets/_search?pretty' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "query": {
+      "ids": {
+        "values": ["ticket-after-reindex"]
+      }
+    }
+  }'
+```
+
+The search through `tickets` now returns zero hits because the alias resolves
+to `tickets-new`. The alias update was atomic, but it only changed routing; it
+did not synchronize the two indexes.
+
+### Migration strategies
+
+- **Pause writes briefly:** stop writers, finish copying and validation, then
+  switch. This is simple but introduces a write outage.
+- **Dual write:** send changes to both indexes. This avoids a pause but needs a
+  plan for partial failures, ordering, updates, and deletes.
+- **Catch up changes:** record changes that occur during the bulk reindex and
+  apply them before switching. A reliable change log is safer than assuming an
+  `updatedAt` query captures every update and deletion.
+- **Rebuild from a source of truth:** generate both indexes from the system that
+  owns the data when OpenSearch is only a search projection.
+- **Use a write alias:** centralize the current write target. This makes routing
+  changes easier, but does not by itself copy writes made during reindexing.
+
+The appropriate choice depends on tolerated downtime, data ownership, write
+volume, and how much synchronization machinery is justified.
+
+### Clean up
+
+Remove the demonstration document and keep the alias on `tickets-new`, matching
+the ending state of Increment 13:
+
+```sh
+curl --fail-with-body \
+  --request POST \
+  'http://localhost:9200/tickets-legacy,tickets-new/_delete_by_query?refresh=true&pretty' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "query": {
+      "ids": {
+        "values": ["ticket-after-reindex"]
+      }
+    }
+  }'
+
+curl --fail-with-body 'http://localhost:9200/_cat/aliases/tickets?v'
+curl --fail-with-body 'http://localhost:9200/tickets-legacy/_count?pretty'
+curl --fail-with-body 'http://localhost:9200/tickets-new/_count?pretty'
+```
 
 ## Stop or reset the lab
 
