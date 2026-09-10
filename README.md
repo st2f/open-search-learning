@@ -18,7 +18,7 @@ Each section introduces one small, inspectable change so the effect on OpenSearc
 10. [Create the replacement index](#10-create-the-replacement-index)
 11. [Reindex the legacy index into the new index](#11-reindex-the-legacy-index-into-the-new-index)
 12. [Introduce an alias](#12-introduce-an-alias)
-13. Perform an alias-based migration
+13. [Perform an alias-based migration](#13-perform-an-alias-based-migration)
 14. Understand reads and writes during migration
 15. Add a basic integration test against local OpenSearch
 16. Run OpenSearch with Testcontainers
@@ -44,11 +44,11 @@ commands name only disposable lab indexes; never replace them with a wildcard.
 
 The exercises have these state boundaries:
 
-| Increments | Indexes | Replay behavior |
-| ---------- | ------- | --------------- |
-| 2–4, 7–12 | `tickets-legacy`, `tickets-new`, then alias `tickets` | This is one evolving migration sequence. Resetting `tickets-legacy` means replaying its later mapping, data, reindex, and alias steps in order. |
-| 5 | `tickets-with-service` | Independent; it can be reset without affecting the migration sequence. |
-| 6 | `tickets-v3`, `tickets-v4` | Independent; both can be reset and compared again. |
+| Increments | Indexes                                               | Replay behavior                                                                                                                                 |
+| ---------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2–4, 7–13  | `tickets-legacy`, `tickets-new`, then alias `tickets` | This is one evolving migration sequence. Resetting `tickets-legacy` means replaying its later mapping, data, reindex, and alias steps in order. |
+| 5          | `tickets-with-service`                                | Independent; it can be reset without affecting the migration sequence.                                                                          |
+| 6          | `tickets-v3`, `tickets-v4`                            | Independent; both can be reset and compared again.                                                                                              |
 
 To reset every exercise, use `docker compose down` and then start the node
 again. This repository has no persistent OpenSearch volume, so that removes all
@@ -1215,6 +1215,188 @@ caller. The alias can then be updated in one atomic operation, and the same
 application request resolves to the replacement. The alias is routing
 indirection, not migration by itself: data still has to be copied and verified,
 and concurrent writes require separate consideration in later increments.
+
+## 13. Perform an alias-based migration
+
+Start with both physical indexes populated and the alias on the legacy index:
+
+```text
+Application
+    ↓
+tickets (alias)
+    ↓
+tickets-legacy
+
+tickets-new (already populated)
+```
+
+Re-establish that exact alias state before replaying the exercise, even if you
+have already performed its final switch:
+
+```sh
+curl --fail-with-body \
+  --request POST 'http://localhost:9200/_aliases' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "actions": [
+      {
+        "remove": {
+          "index": "tickets-new",
+          "alias": "tickets",
+          "must_exist": false
+        }
+      },
+      {
+        "add": {
+          "index": "tickets-legacy",
+          "alias": "tickets"
+        }
+      }
+    ]
+  }'
+
+curl --fail-with-body 'http://localhost:9200/_cat/aliases/tickets?v'
+```
+
+This reset is narrowly scoped to the two indexes in this migration. It neither
+deletes an index nor changes any documents.
+
+Before switching, confirm that the destination is still ready:
+
+```sh
+curl --fail-with-body 'http://localhost:9200/tickets-legacy/_count?pretty'
+curl --fail-with-body 'http://localhost:9200/tickets-new/_count?pretty'
+curl --fail-with-body 'http://localhost:9200/tickets-new/_mapping?pretty'
+npm run ticket:alias
+```
+
+The counts should agree, the destination should map `responseTimeMinutes` as
+`float`, and the TypeScript reader should report `tickets-legacy`.
+
+### Switch to the replacement index
+
+Send the removal and addition in one Aliases API request:
+
+```sh
+curl --fail-with-body \
+  --request POST 'http://localhost:9200/_aliases' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "actions": [
+      {
+        "remove": {
+          "index": "tickets-legacy",
+          "alias": "tickets",
+          "must_exist": true
+        }
+      },
+      {
+        "add": {
+          "index": "tickets-new",
+          "alias": "tickets"
+        }
+      }
+    ]
+  }'
+```
+
+OpenSearch applies the actions as one atomic cluster-state update. Callers see
+the alias relationship before or after the update; they are not exposed to the
+missing-alias interval that two separate requests would create. Keeping both
+actions together also avoids accidentally leaving the alias attached to both
+indexes, which would make a read search both of them.
+
+Verify the result through the alias:
+
+```sh
+curl --fail-with-body 'http://localhost:9200/_cat/aliases/tickets?v'
+curl --fail-with-body 'http://localhost:9200/tickets/_mapping?pretty'
+curl --fail-with-body 'http://localhost:9200/tickets/_count?pretty'
+npm run ticket:alias
+```
+
+The mapping response is keyed by `tickets-new`, its response-time field is a
+`float`, and the unchanged TypeScript reader now reports `tickets-new`. The
+caller still asks for `tickets`; only cluster alias metadata changed.
+
+### Roll back once
+
+Practice the reverse operation while the exercise data is still identical:
+
+```sh
+curl --fail-with-body \
+  --request POST 'http://localhost:9200/_aliases' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "actions": [
+      {
+        "remove": {
+          "index": "tickets-new",
+          "alias": "tickets",
+          "must_exist": true
+        }
+      },
+      {
+        "add": {
+          "index": "tickets-legacy",
+          "alias": "tickets"
+        }
+      }
+    ]
+  }'
+
+npm run ticket:alias
+```
+
+That does not make every real rollback safe: once new writes or new-only document shapes reach the replacement index, the legacy index may no longer contain equivalent data. Increment 14 examines that write-consistency problem.
+
+### Finish on the new index
+
+Repeat the atomic forward switch so the final state is ready for the next
+increment:
+
+```sh
+curl --fail-with-body \
+  --request POST 'http://localhost:9200/_aliases' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "actions": [
+      {
+        "remove": {
+          "index": "tickets-legacy",
+          "alias": "tickets",
+          "must_exist": true
+        }
+      },
+      {
+        "add": {
+          "index": "tickets-new",
+          "alias": "tickets"
+        }
+      }
+    ]
+  }'
+
+npm run ticket:alias
+```
+
+The final relationship is:
+
+```text
+Application (unchanged)
+    ↓
+tickets (alias)
+    ↓
+tickets-new
+
+tickets-legacy (retained for comparison and possible rollback)
+```
+
+Changing a stable alias is safer than coordinating a physical-name change in
+every caller: the routing decision is centralized and atomic, and rollback can
+use the same mechanism while the two indexes remain data-compatible. It does
+not remove the need to validate mappings, copied data, queries, and active
+writes before switching.
 
 ## Stop or reset the lab
 
