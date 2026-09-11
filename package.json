@@ -3,6 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "typecheck": "tsc",
+    "test:integration": "vitest run tests/integration",
     "search": "node src/search-tickets.ts",
     "search:service": "node src/search-tickets-by-service.ts",
     "search:events": "node src/search-tickets-by-events.ts",
@@ -16,5 +18,10 @@
   },
   "dependencies": {
     "@opensearch-project/opensearch": "3.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.4",
+    "typescript": "7.0.2",
+    "vitest": "5.0.0"
   }
 }

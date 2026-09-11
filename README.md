@@ -20,7 +20,7 @@ Each section introduces one small, inspectable change so the effect on OpenSearc
 12. [Introduce an alias](#12-introduce-an-alias)
 13. [Perform an alias-based migration](#13-perform-an-alias-based-migration)
 14. [Understand reads and writes during migration](#14-understand-reads-and-writes-during-migration)
-15. Add a basic integration test against local OpenSearch
+15. [Add a basic integration test against local OpenSearch](#15-add-a-basic-integration-test-against-local-opensearch)
 16. Run OpenSearch with Testcontainers
 17. Test the mapping, not just the application result
 18. Test a migration against existing data
@@ -1563,6 +1563,53 @@ curl --fail-with-body 'http://localhost:9200/_cat/aliases/tickets?v'
 curl --fail-with-body 'http://localhost:9200/tickets-legacy/_count?pretty'
 curl --fail-with-body 'http://localhost:9200/tickets-new/_count?pretty'
 ```
+
+## 15. Add a basic integration test against local OpenSearch
+
+The preceding increments leave the migration indexes in place, but this
+exercise does not use or modify them.
+
+Run the integration test with:
+
+```sh
+npm run typecheck
+npm run test:integration
+```
+
+The test in
+[`tests/integration/search-tickets.test.ts`](tests/integration/search-tickets.test.ts)
+uses Vitest. Vitest transforms TypeScript test files but does not type-check them by
+default. `npm run typecheck` runs the TypeScript compiler with `noEmit`, using
+[`tsconfig.json`](tsconfig.json), so compiler and editor errors are checked
+separately without producing JavaScript files.
+
+### State owned by the test
+
+Every run generates a physical index name with this shape:
+
+```text
+tickets-integration-<random UUID>
+```
+
+Within that index, the test:
+
+1. installs a strict explicit mapping for `customerId`, `title`, and `status`
+2. indexes three representative tickets using stable document IDs
+3. explicitly refreshes the index so the following search sees those writes
+4. combines a full-text `match` on `title` with an exact `term` filter on
+   `status`
+5. asserts that the matching `_id` and `_source` are the expected ticket
+6. deletes its generated index in a `finally` block, including when an
+   assertion fails
+
+Confirm successful cleanup without relying on any earlier exercise state:
+
+```sh
+curl --fail-with-body \
+  'http://localhost:9200/_cat/indices/tickets-integration-*?v&allow_no_indices=true'
+```
+
+After a successful run, this should show no test indexes.
 
 ## Stop or reset the lab
 
