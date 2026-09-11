@@ -4,7 +4,9 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc",
-    "test:integration": "vitest run tests/integration",
+    "test:integration:local": "vitest run tests/integration/search-tickets.local.test.ts",
+    "test:integration": "vitest run tests/integration/search-tickets.test.ts",
+    "test:integration:colima": "DOCKER_HOST=unix://${HOME}/.colima/default/docker.sock TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock NODE_OPTIONS=--dns-result-order=ipv4first vitest run tests/integration/search-tickets.test.ts",
     "search": "node src/search-tickets.ts",
     "search:service": "node src/search-tickets-by-service.ts",
     "search:events": "node src/search-tickets-by-events.ts",
@@ -20,8 +22,18 @@
     "@opensearch-project/opensearch": "3.6.0"
   },
   "devDependencies": {
+    "@testcontainers/opensearch": "12.1.0",
     "@types/node": "24.13.4",
     "typescript": "7.0.2",
     "vitest": "5.0.0"
+  },
+  "allowScripts": {
+    "cpu-features@0.0.10": true,
+    "fsevents@2.3.3": true,
+    "protobufjs@7.6.6": true,
+    "ssh2@1.17.0": true
+  },
+  "overrides": {
+    "glob": "^12.0.0"
   }
 }

@@ -1,3 +1,5 @@
+[![OpenSearch integration test](https://github.com/st2f/open-search-learning/actions/workflows/opensearch-integration.yml/badge.svg)](https://github.com/st2f/open-search-learning/actions/workflows/opensearch-integration.yml)
+
 # OpenSearch learning
 
 This repository is a hands-on OpenSearch lab focused on how data is modeled, indexed, queried, and evolved over time. The exercises build from a single local node and explicit mappings toward schema changes, reindexing, aliases, migration safety, and integration testing.
@@ -21,7 +23,7 @@ Each section introduces one small, inspectable change so the effect on OpenSearc
 13. [Perform an alias-based migration](#13-perform-an-alias-based-migration)
 14. [Understand reads and writes during migration](#14-understand-reads-and-writes-during-migration)
 15. [Add a basic integration test against local OpenSearch](#15-add-a-basic-integration-test-against-local-opensearch)
-16. Run OpenSearch with Testcontainers
+16. [Run OpenSearch with Testcontainers](#16-run-opensearch-with-testcontainers)
 17. Test the mapping, not just the application result
 18. Test a migration against existing data
 19. Deliberately break the migration
@@ -1573,11 +1575,11 @@ Run the integration test with:
 
 ```sh
 npm run typecheck
-npm run test:integration
+npm run test:integration:local
 ```
 
 The test in
-[`tests/integration/search-tickets.test.ts`](tests/integration/search-tickets.test.ts)
+[`tests/integration/search-tickets.local.test.ts`](tests/integration/search-tickets.local.test.ts)
 uses Vitest. Vitest transforms TypeScript test files but does not type-check them by
 default. `npm run typecheck` runs the TypeScript compiler with `noEmit`, using
 [`tsconfig.json`](tsconfig.json), so compiler and editor errors are checked
@@ -1610,6 +1612,105 @@ curl --fail-with-body \
 ```
 
 After a successful run, this should show no test indexes.
+
+## 16. Run OpenSearch with Testcontainers
+
+Increment 15 requires OpenSearch to be running on `localhost:9200`. This
+increment keeps that local version for comparison, but the new test owns the
+OpenSearch process as well as its index.
+
+Starting state:
+
+- Docker is installed and its daemon is running
+- no manually started OpenSearch container is required
+- no indexes from earlier increments are required or modified
+
+Install the locked dependencies, type-check, and run the test:
+
+```sh
+npm ci
+npm run typecheck
+npm run test:integration
+```
+
+If using colima:
+
+```sh
+npm run test:integration:colima
+```
+
+`DOCKER_HOST` identifies Colima's host-side socket. The socket override is the
+path seen by Testcontainers' cleanup container, and preferring IPv4 avoids a
+known mismatch between Node's DNS behavior and Colima's port forwarding.
+
+The suite in
+[`tests/integration/search-tickets.test.ts`](tests/integration/search-tickets.test.ts)
+uses `OpenSearchContainer` from the `@testcontainers/opensearch` npm package.
+This package configures an OpenSearch container and waits for it to become
+ready. The test uses the same pinned OpenSearch 3.8.0 image as the Compose lab.
+The suite lifecycle is:
+
+```text
+beforeAll: start OpenSearch container and create client
+    test: create index → index fixtures → query → delete index
+ afterAll: close client and stop container
+```
+
+One container is shared by the tests in this suite. Starting OpenSearch is much
+slower than creating this tiny index, so a container per test would add cost
+without improving isolation here. Each test still needs to own uniquely named
+state and clean it up so later tests in the same suite cannot observe it.
+
+Both provider-specific tests pass their client to the same
+[`runTicketSearchScenario`](tests/integration/test-ticket-search.ts) helper. That
+helper owns the index mapping, fixtures, query, assertions, and cleanup. The
+provider is the only meaningful difference:
+
+```text
+local test                       Testcontainers test
+    │                                    │
+localhost:9200                 container.getHttpUrl()
+    │                                    │
+    └────────────── Client ──────────────┘
+                         │
+              same integration test
+```
+
+Testcontainers changes who provisions OpenSearch; it does not change what the
+application-level integration test verifies.
+
+### Ports and readiness
+
+OpenSearch listens on port 9200 inside the container. Testcontainers publishes
+that port on an available host port. With a local Docker daemon, including a
+typical Ubuntu CI runner, the resulting URL usually looks like
+`http://localhost:49183`, with a different port on each run. A remote Docker
+runtime may provide a different host.
+
+`getHttpUrl()` returns the host and mapped port for the active runtime:
+
+```ts
+client = new Client({ node: container.getHttpUrl() });
+```
+
+Hard-coding `localhost:9200` would connect to the Compose lab instead of the
+test container. It would also fail when Docker runs on another host.
+
+The `@testcontainers/opensearch` package waits for a successful HTTP response
+from OpenSearch and gives the container up to 120 seconds to start. The Vitest
+`beforeAll` hook has a separate 130-second timeout, giving Testcontainers time
+to report a more specific startup error first.
+
+Finally, `afterAll` stops the suite's container even when a test assertion
+fails. Because Testcontainers selects a random host port and this suite creates
+a fresh container filesystem, it can run while the Compose-based lab remains
+on port 9200 without reading or changing that cluster.
+
+The GitHub Actions workflow in
+[`opensearch-integration.yml`](.github/workflows/opensearch-integration.yml)
+runs this same test on Ubuntu for pushes and pull requests, or on demand. The
+runner already provides Docker, so the workflow needs neither Compose nor the
+Colima-specific command.
 
 ## Stop or reset the lab
 

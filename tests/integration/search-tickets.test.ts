@@ -1,112 +1,38 @@
-import { randomUUID } from "node:crypto";
 import { Client } from "@opensearch-project/opensearch";
-import { expect, test } from "vitest";
+import {
+  OpenSearchContainer,
+  type StartedOpenSearchContainer,
+} from "@testcontainers/opensearch";
+import { afterAll, beforeAll, describe, test } from "vitest";
+import { runTicketSearchScenario } from "./test-ticket-search.ts";
 
-type Ticket = {
-  customerId: string;
-  title: string;
-  status: string;
-};
+describe("ticket search with Testcontainers", () => {
+  let container: StartedOpenSearchContainer | undefined;
+  let client: Client | undefined;
 
-type SearchHit<TDocument> = {
-  _id?: string;
-  _source?: TDocument;
-};
+  beforeAll(async () => {
+    container = await new OpenSearchContainer(
+      "opensearchproject/opensearch:3.8.0",
+    )
+      .withSecurityEnabled(false)
+      .withEnvironment({
+        OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m",
+      })
+      .start();
 
-test("finds an open payment ticket using the installed mapping", async () => {
-  const client = new Client({ node: "http://localhost:9200" });
-  const indexName = `tickets-integration-${randomUUID()}`;
-  let indexCreated = false;
+    client = new Client({ node: container.getHttpUrl() });
+  }, 130_000);
 
-  try {
-    await client.indices.create({
-      index: indexName,
-      body: {
-        settings: {
-          index: {
-            number_of_shards: 1,
-            number_of_replicas: 0,
-          },
-        },
-        mappings: {
-          dynamic: "strict",
-          properties: {
-            customerId: { type: "keyword" },
-            title: { type: "text" },
-            status: { type: "keyword" },
-          },
-        },
-      },
-    });
-    indexCreated = true;
+  afterAll(async () => {
+    client?.close();
+    await container?.stop();
+  });
 
-    const tickets: Array<{ id: string; document: Ticket }> = [
-      {
-        id: "ticket-1",
-        document: {
-          customerId: "customer-123",
-          title: "Payment service unavailable",
-          status: "open",
-        },
-      },
-      {
-        id: "ticket-2",
-        document: {
-          customerId: "customer-456",
-          title: "Payment service restored",
-          status: "closed",
-        },
-      },
-      {
-        id: "ticket-3",
-        document: {
-          customerId: "customer-789",
-          title: "Password reset unavailable",
-          status: "open",
-        },
-      },
-    ];
-
-    for (const ticket of tickets) {
-      await client.index({
-        index: indexName,
-        id: ticket.id,
-        body: ticket.document,
-      });
+  test("finds an open payment ticket", async () => {
+    if (!client) {
+      throw new Error("OpenSearch client was not initialized");
     }
-    await client.indices.refresh({ index: indexName });
 
-    const response = await client.search({
-      index: indexName,
-      body: {
-        query: {
-          bool: {
-            must: {
-              match: {
-                title: "PAYMENT",
-              },
-            },
-            filter: {
-              term: {
-                status: "open",
-              },
-            },
-          },
-        },
-      },
-    });
-
-    const hits = response.body.hits.hits as SearchHit<Ticket>[];
-    expect(hits).toHaveLength(1);
-    expect(hits[0]?._id).toBe("ticket-1");
-    expect(hits[0]?._source).toEqual(tickets[0]?.document);
-  } finally {
-    try {
-      if (indexCreated) {
-        await client.indices.delete({ index: indexName });
-      }
-    } finally {
-      client.close();
-    }
-  }
+    await runTicketSearchScenario(client);
+  });
 });
