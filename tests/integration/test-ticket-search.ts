@@ -39,6 +39,19 @@ export async function runTicketSearchScenario(client: Client): Promise<void> {
     });
     indexCreated = true;
 
+    const mappingResponse = await client.indices.getMapping({
+      index: indexName,
+    });
+
+    expect(mappingResponse.body[indexName]?.mappings).toEqual({
+      dynamic: "strict",
+      properties: {
+        customerId: { type: "keyword" },
+        title: { type: "text" },
+        status: { type: "keyword" },
+      },
+    });
+
     const tickets: Array<{ id: string; document: Ticket }> = [
       {
         id: "ticket-1",

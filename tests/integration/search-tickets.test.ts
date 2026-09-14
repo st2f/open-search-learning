@@ -28,7 +28,7 @@ describe("ticket search with Testcontainers", () => {
     await container?.stop();
   });
 
-  test("finds an open payment ticket", async () => {
+  test("installs the ticket mapping and finds an open payment ticket", async () => {
     if (!client) {
       throw new Error("OpenSearch client was not initialized");
     }

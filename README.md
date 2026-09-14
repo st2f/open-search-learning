@@ -24,7 +24,7 @@ Each section introduces one small, inspectable change so the effect on OpenSearc
 14. [Understand reads and writes during migration](#14-understand-reads-and-writes-during-migration)
 15. [Add a basic integration test against local OpenSearch](#15-add-a-basic-integration-test-against-local-opensearch)
 16. [Run OpenSearch with Testcontainers](#16-run-opensearch-with-testcontainers)
-17. Test the mapping, not just the application result
+17. [Test the mapping, not just the application result](#17-test-the-mapping-not-just-the-application-result)
 18. Test a migration against existing data
 19. Deliberately break the migration
 20. Model a support-monitoring document
@@ -1711,6 +1711,72 @@ The GitHub Actions workflow in
 runs this same test on Ubuntu for pushes and pull requests, or on demand. The
 runner already provides Docker, so the workflow needs neither Compose nor the
 Colima-specific command.
+
+## 17. Test the mapping, not just the application result
+
+Use same setup and cleanup as in previous increment. The shared scenario in
+[`test-ticket-search.ts`](tests/integration/test-ticket-search.ts) now reads the
+mapping back from OpenSearch immediately after creating the index:
+
+```ts
+const mappingResponse = await client.indices.getMapping({
+  index: indexName,
+});
+```
+
+It asserts the complete mapping contract used by this exercise:
+
+```ts
+expect(mappingResponse.body[indexName]?.mappings).toEqual({
+  dynamic: "strict",
+  properties: {
+    customerId: { type: "keyword" },
+    title: { type: "text" },
+    status: { type: "keyword" },
+  },
+});
+```
+
+The expected value is written independently from the index-creation request.
+Reusing the same mapping object for creation and expectation would mostly prove
+that the test received the object it had just supplied; separate literals make
+an accidental change to the installed schema fail unless the expected contract
+is deliberately updated too.
+
+### Why the search assertion is insufficient
+
+The existing application-level assertion proves that the current fixtures and
+query return `ticket-1`. It does not prove that every field has the intended
+indexing behavior. For example, changing only the creation mapping for
+`status` from `keyword` to `text` still lets this particular query pass:
+
+```json
+{
+  "term": {
+    "status": "open"
+  }
+}
+```
+
+The standard analyzer produces the token `open` from the fixture value
+`"open"`, so the lowercase term happens to match. The mapping assertion fails
+because `status` is part of the schema contract and must remain a `keyword`.
+That protects exact matching for values whose analysis would change them, and
+also protects expected sorting and aggregation behavior that this search does
+not exercise.
+
+Reading a document's `_source` would not close this gap either. `_source`
+contains the original JSON, not the analyzed terms or other search structures
+built from it. Testing both layers gives distinct evidence:
+
+| Assertion         | What it proves                                                    |
+| ----------------- | ----------------------------------------------------------------- |
+| Installed mapping | OpenSearch has the intended field types and strict dynamic policy |
+| Search result     | Representative data and the application query work together       |
+
+This resembles checking both a relational database's schema metadata and a
+query result. A passing result set is evidence for one behavior, not proof that
+the underlying schema is correct.
 
 ## Stop or reset the lab
 
