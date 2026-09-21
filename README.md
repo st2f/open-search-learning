@@ -26,7 +26,7 @@ Each section introduces one small, inspectable change so the effect on OpenSearc
 16. [Run OpenSearch with Testcontainers](#16-run-opensearch-with-testcontainers)
 17. [Test the mapping, not just the application result](#17-test-the-mapping-not-just-the-application-result)
 18. [Test a migration against existing data](#18-test-a-migration-against-existing-data)
-19. Deliberately break the migration
+19. [Deliberately break the migration](#19-deliberately-break-the-migration)
 20. Model a support-monitoring document
 21. Test application code against OpenSearch
 22. Safe test cleanup and isolation
@@ -1844,6 +1844,67 @@ query agree with today's mapping, but it never exposes the old mapping, stored
 document shapes, reindex behavior, or alias transition. A migration test treats
 the pre-existing state as an input and proves that the transition produces the
 new state.
+
+## 19. Deliberately break the migration
+
+This increment keeps the successful migration from Increment 18 and adds a
+separate, deliberately broken scenario. Its destination mapping incorrectly
+declares `responseTimeMinutes` as a `boolean` even though the existing source
+documents contain integer values such as `15` and `30`:
+
+```text
+legacy source                 broken destination
+responseTimeMinutes: 30  →    responseTimeMinutes: boolean
+             valid here  ✗    cannot be indexed here
+```
+
+Run the scenario against an already-running local OpenSearch node:
+
+```sh
+npm run typecheck
+npm run test:integration:local
+```
+
+Or let Testcontainers provide an isolated OpenSearch node:
+
+```sh
+npm run test:integration
+```
+
+For Colima, use the `npm run test:integration:colima` command.
+
+No earlier exercise indexes are required. The local and Testcontainers suites
+execute the same scenarios; running both verifies the two providers, but is
+not required to exercise the migration behavior twice.
+
+The test in
+[`test-broken-ticket-migration.ts`](tests/integration/test-broken-ticket-migration.ts)
+passes because it expects the migration to be rejected at the document level.
+This keeps the automated suite useful while still exercising a real failure.
+It checks the evidence in the order an operator would investigate it:
+
+| Evidence              | Observed result                                | What it reveals                                    |
+| --------------------- | ---------------------------------------------- | -------------------------------------------------- |
+| Client error          | HTTP status `400` with a reindex response body | The data copy was rejected, not merely interrupted |
+| Reindex response body | Two failures, zero documents created           | Neither existing document could be copied          |
+| Failure entries       | `mapper_parsing_exception` for both IDs        | Destination mapping rejected each document         |
+| Source `_source`      | `responseTimeMinutes` is the number `30`       | The actual stored representation being copied      |
+| Destination mapping   | `responseTimeMinutes` is `boolean`             | The incompatible migration assumption              |
+| Document counts       | Legacy `2`, replacement `0`                    | No source data was lost and no document migrated   |
+| Alias state           | Still points only to the legacy index          | Callers remain on the intact old data              |
+
+With the pinned OpenSearch 3.8.0 server, this failed `_reindex` returns HTTP
+`400`, so the JavaScript client rejects its promise. The error still contains a
+structured reindex body under `meta.body`, including the individual failures.
+Checking only that an exception occurred tells you the migration failed, but
+not which documents or mapping caused it. This exercise inspects both the
+status and body, and permits the atomic alias update only after a successful
+response whose `failures` array is empty.
+
+The destination index is created before reindexing, so its mapping is available
+for inspection after the failure. Both uniquely named physical indexes are
+deleted in the test's `finally` block, and deleting the legacy index removes
+the temporary alias with it.
 
 ## Stop or reset the lab
 
