@@ -27,7 +27,7 @@ Each section introduces one small, inspectable change so the effect on OpenSearc
 17. [Test the mapping, not just the application result](#17-test-the-mapping-not-just-the-application-result)
 18. [Test a migration against existing data](#18-test-a-migration-against-existing-data)
 19. [Deliberately break the migration](#19-deliberately-break-the-migration)
-20. Model a support-monitoring document
+20. [Model a support-monitoring document](#20-model-a-support-monitoring-document)
 21. Test application code against OpenSearch
 22. Safe test cleanup and isolation
 23. Optional: index templates
@@ -51,6 +51,7 @@ The exercises have these state boundaries:
 | 2–4, 7–14  | `tickets-legacy`, `tickets-new`, then alias `tickets` | This is one evolving migration sequence. Resetting `tickets-legacy` means replaying its later mapping, data, reindex, and alias steps in order. |
 | 5          | `tickets-with-service`                                | Independent; it can be reset without affecting the migration sequence.                                                                          |
 | 6          | `tickets-v3`, `tickets-v4`                            | Independent; both can be reset and compared again.                                                                                              |
+| 20         | `support-monitoring-v1`                               | Independent; its mapping, fixtures, and queries do not use the earlier ticket indexes.                                                          |
 
 To reset every exercise, use `docker compose down` and then start the node
 again. This repository has no persistent OpenSearch volume, so that removes all
@@ -1905,6 +1906,198 @@ The destination index is created before reindexing, so its mapping is available
 for inspection after the failure. Both uniquely named physical indexes are
 deleted in the test's `finally` block, and deleting the legacy index removes
 the temporary alias with it.
+
+## 20. Model a support-monitoring document
+
+This exercise introduces an independent, invented support-monitoring model. It
+does not reproduce a production schema and does not use any index from the
+earlier migration exercises.
+
+Starting state:
+
+- Docker is installed and its daemon is running
+- commands are run from the repository root
+- no earlier exercise index or alias is required
+
+### Create the index and fixtures
+
+Start the local node and wait for `docker compose ps` to report it as healthy:
+
+```sh
+docker compose up -d
+docker compose ps
+```
+
+Reset only this exercise's physical index so the complete setup is replayable:
+
+```sh
+curl --fail-with-body \
+  --request DELETE \
+  'http://localhost:9200/support-monitoring-v1?ignore_unavailable=true'
+```
+
+Create it from the explicit mapping in
+[`support-monitoring-v1.json`](mappings/support-monitoring-v1.json):
+
+```sh
+curl --fail-with-body \
+  --request PUT 'http://localhost:9200/support-monitoring-v1' \
+  --header 'Content-Type: application/json' \
+  --data-binary '@mappings/support-monitoring-v1.json'
+```
+
+Index four invented documents from
+[`support-monitoring-v1.ndjson`](fixtures/support-monitoring-v1.ndjson):
+
+```sh
+curl --fail-with-body \
+  --request POST \
+  'http://localhost:9200/support-monitoring-v1/_bulk?refresh=wait_for&pretty' \
+  --header 'Content-Type: application/x-ndjson' \
+  --data-binary '@fixtures/support-monitoring-v1.ndjson'
+```
+
+The Bulk API uses newline-delimited JSON: each action line is followed by its
+document line, and the file ends with a newline. Confirm that the response has
+`"errors": false`, then inspect the resulting state:
+
+```sh
+curl --fail-with-body \
+  'http://localhost:9200/support-monitoring-v1/_count?pretty'
+
+curl --fail-with-body \
+  'http://localhost:9200/support-monitoring-v1/_mapping?pretty'
+```
+
+The count is `4`. The fixtures use stable `_id` values, while the reset ensures
+that no mapping or document state leaks in from an earlier run.
+
+### Mapping decisions
+
+| Field | Mapping | Role and reason |
+| --- | --- | --- |
+| `customerId`, `serviceId` | `keyword` | Identifiers used as exact filters; tokenizing them would lose their identity semantics. |
+| `ticket.type`, `ticket.status` | `keyword` | Filterable categorical values such as `INCIDENT` and `overdue`. |
+| `ticket.dueDate` | `date` with `strict_date` | A date-only deadline that supports validation, chronological ranges, and sorting. |
+| `updatedAt` | `date` with `strict_date_time_no_millis` | An exact update instant; the explicit format matches the UTC fixture values. |
+| `indicators.openCount`, `indicators.resolvedCount` | `integer` | Whole-number indicators that remain available for ranges, sorting, and numeric aggregations. |
+| `ticket`, `indicators` | `object` | Each is one structured value, so dot notation is sufficient and `nested` would add no useful tuple isolation. |
+
+The mapping is strict at the root and inside both objects. A misspelled or
+unplanned field is rejected instead of silently receiving a dynamic type.
+Unlike normalized SQL tables, this document deliberately stores the ticket
+view and its current indicators together as one search projection. That makes
+these reads direct, but duplicated values and synchronization would need an
+explicit owner in a real system.
+
+### Query overdue tickets for one customer
+
+```sh
+curl --fail-with-body \
+  --request GET 'http://localhost:9200/support-monitoring-v1/_search?pretty' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "query": {
+      "bool": {
+        "filter": [
+          { "term": { "customerId": "customer-123" } },
+          { "term": { "ticket.status": "overdue" } }
+        ]
+      }
+    },
+    "sort": [{ "ticket.dueDate": "asc" }]
+  }'
+```
+
+This returns `monitoring-4`, then `monitoring-1`. Both conditions use filter
+context because exact eligibility matters and relevance scoring does not.
+The approximate SQL predicate is:
+
+```sql
+WHERE customer_id = 'customer-123'
+  AND ticket_status = 'overdue'
+ORDER BY due_date ASC
+```
+
+### Query tickets for one service
+
+```sh
+curl --fail-with-body \
+  --request GET 'http://localhost:9200/support-monitoring-v1/_search?pretty' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "query": { "term": { "serviceId": "service-42" } },
+    "sort": [{ "ticket.dueDate": "asc" }]
+  }'
+```
+
+This returns `monitoring-3`, `monitoring-4`, and `monitoring-1`. A `term` query
+on a `keyword` is the analogue of `WHERE service_id = 'service-42'`, although
+OpenSearch reads the already-denormalized service identifier from each
+document rather than joining a ticket table to a service table.
+
+### Query tickets due before a date
+
+```sh
+curl --fail-with-body \
+  --request GET 'http://localhost:9200/support-monitoring-v1/_search?pretty' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "query": {
+      "range": {
+        "ticket.dueDate": { "lt": "2026-09-16" }
+      }
+    },
+    "sort": [{ "ticket.dueDate": "asc" }]
+  }'
+```
+
+This returns `monitoring-3`, `monitoring-4`, and `monitoring-1`. The SQL-like
+condition is `WHERE due_date < DATE '2026-09-16'`. OpenSearch's mapping—not the
+JSON string syntax alone—is what makes this a date comparison.
+
+### Query one status
+
+```sh
+curl --fail-with-body \
+  --request GET 'http://localhost:9200/support-monitoring-v1/_search?pretty' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "query": { "term": { "ticket.status": "open" } }
+  }'
+```
+
+This returns only `monitoring-2`, corresponding roughly to
+`WHERE ticket_status = 'open'`.
+
+### Count documents by status
+
+```sh
+curl --fail-with-body \
+  --request GET 'http://localhost:9200/support-monitoring-v1/_search?pretty' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "size": 0,
+    "aggs": {
+      "tickets_by_status": {
+        "terms": { "field": "ticket.status" }
+      }
+    }
+  }'
+```
+
+`size: 0` suppresses document hits because only bucket counts are needed. The
+result contains `overdue: 2`, `open: 1`, and `resolved: 1`. This is closest to:
+
+```sql
+SELECT ticket_status, COUNT(*)
+FROM support_monitoring
+GROUP BY ticket_status;
+```
+
+The aggregation works directly on `ticket.status` because it is a `keyword`.
+A `text` field would be analyzed for full-text search and would not provide the
+same exact-value aggregation behavior by default.
 
 ## Stop or reset the lab
 

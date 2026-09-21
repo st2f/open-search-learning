@@ -1,0 +1,8 @@
+{"index":{"_id":"monitoring-1"}}
+{"customerId":"customer-123","serviceId":"service-42","ticket":{"type":"INCIDENT","dueDate":"2026-09-15","status":"overdue"},"indicators":{"openCount":2,"resolvedCount":8},"updatedAt":"2026-09-01T18:00:00Z"}
+{"index":{"_id":"monitoring-2"}}
+{"customerId":"customer-123","serviceId":"service-43","ticket":{"type":"REQUEST","dueDate":"2026-09-25","status":"open"},"indicators":{"openCount":1,"resolvedCount":3},"updatedAt":"2026-09-02T09:30:00Z"}
+{"index":{"_id":"monitoring-3"}}
+{"customerId":"customer-456","serviceId":"service-42","ticket":{"type":"INCIDENT","dueDate":"2026-09-10","status":"resolved"},"indicators":{"openCount":0,"resolvedCount":12},"updatedAt":"2026-09-03T11:15:00Z"}
+{"index":{"_id":"monitoring-4"}}
+{"customerId":"customer-123","serviceId":"service-42","ticket":{"type":"PROBLEM","dueDate":"2026-09-12","status":"overdue"},"indicators":{"openCount":3,"resolvedCount":5},"updatedAt":"2026-09-04T14:45:00Z"}

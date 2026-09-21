@@ -1,0 +1,51 @@
+{
+  "settings": {
+    "index": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0
+    }
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "customerId": {
+        "type": "keyword"
+      },
+      "serviceId": {
+        "type": "keyword"
+      },
+      "ticket": {
+        "type": "object",
+        "dynamic": "strict",
+        "properties": {
+          "type": {
+            "type": "keyword"
+          },
+          "dueDate": {
+            "type": "date",
+            "format": "strict_date"
+          },
+          "status": {
+            "type": "keyword"
+          }
+        }
+      },
+      "indicators": {
+        "type": "object",
+        "dynamic": "strict",
+        "properties": {
+          "openCount": {
+            "type": "integer"
+          },
+          "resolvedCount": {
+            "type": "integer"
+          }
+        }
+      },
+      "updatedAt": {
+        "type": "date",
+        "format": "strict_date_time_no_millis"
+      }
+    }
+  }
+}
