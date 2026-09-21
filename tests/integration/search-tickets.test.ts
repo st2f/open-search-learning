@@ -4,6 +4,7 @@ import {
   type StartedOpenSearchContainer,
 } from "@testcontainers/opensearch";
 import { afterAll, beforeAll, describe, test } from "vitest";
+import { runTicketMigrationScenario } from "./test-ticket-migration.ts";
 import { runTicketSearchScenario } from "./test-ticket-search.ts";
 
 describe("ticket search with Testcontainers", () => {
@@ -34,5 +35,13 @@ describe("ticket search with Testcontainers", () => {
     }
 
     await runTicketSearchScenario(client);
+  });
+
+  test("migrates existing legacy tickets and switches the alias", async () => {
+    if (!client) {
+      throw new Error("OpenSearch client was not initialized");
+    }
+
+    await runTicketMigrationScenario(client);
   });
 });

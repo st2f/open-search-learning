@@ -956,24 +956,3 @@ real query
   ↓
 assert expected behavior
 ```
-
-The most important increments are probably:
-
-- 2 — explicit mappings
-- 4 — text versus keyword
-- 6 — object versus nested
-- 7 — inspect existing state
-- 9 — incompatible mapping changes
-- 11 — reindex
-- 12–14 — aliases and migration behavior
-- 16 — Testcontainers
-- 18 — migration testing against old state
-- 19 — debugging failed migrations
-
-The other increments make those concepts concrete rather than theoretical.
-
-Increment 18 is particularly relevant: an integration test for a migration should often construct the old state, populate it, then exercise the transition. Creating an empty index with today’s mapping and checking that queries work would miss exactly the class of problem you caught manually.
-
-Avoided using the Testcontainers Elasticsearch module automatically. Testcontainers for Node currently documents an Elasticsearch-specific module, while OpenSearch has its own official Docker images; using a generic container is the safer learning assumption unless the versions/APIs are deliberately verified compatible.
-
-And the alias/reindex sequence in the plan corresponds to current OpenSearch behavior: the destination needs to exist/configured before reindexing, and alias updates can be atomic.

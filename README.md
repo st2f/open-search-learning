@@ -25,7 +25,7 @@ Each section introduces one small, inspectable change so the effect on OpenSearc
 15. [Add a basic integration test against local OpenSearch](#15-add-a-basic-integration-test-against-local-opensearch)
 16. [Run OpenSearch with Testcontainers](#16-run-opensearch-with-testcontainers)
 17. [Test the mapping, not just the application result](#17-test-the-mapping-not-just-the-application-result)
-18. Test a migration against existing data
+18. [Test a migration against existing data](#18-test-a-migration-against-existing-data)
 19. Deliberately break the migration
 20. Model a support-monitoring document
 21. Test application code against OpenSearch
@@ -1777,6 +1777,73 @@ built from it. Testing both layers gives distinct evidence:
 This resembles checking both a relational database's schema metadata and a
 query result. A passing result set is evidence for one behavior, not proof that
 the underlying schema is correct.
+
+## 18. Test a migration against existing data
+
+The previous tests create only the current mapping. This increment adds a
+second scenario that begins with the schema and documents that existed before
+the migration:
+
+```text
+legacy integer mapping + existing documents
+                    ↓
+create float-mapped replacement → reindex → atomic alias switch
+                    ↓
+       query and inspect the replacement through the alias
+```
+
+The starting state is still fully owned by the test. Each run creates three
+unique names containing the same random UUID:
+
+- `tickets-migration-legacy-<UUID>` for the old physical index
+- `tickets-migration-new-<UUID>` for the replacement physical index
+- `tickets-migration-<UUID>` for the stable alias
+
+No indexes from the manual Increments 2–14 are required or modified. Run the
+scenario through either provider introduced earlier:
+
+```sh
+npm run typecheck
+npm run test:integration:local
+```
+
+Or let Testcontainers provide an isolated OpenSearch node:
+
+```sh
+npm run test:integration
+```
+
+For Colima, use the `npm run test:integration:colima` command from Increment
+16 instead.
+
+The shared scenario in
+[`test-ticket-migration.ts`](tests/integration/test-ticket-migration.ts) does
+the following in order:
+
+1. creates a legacy index whose `responseTimeMinutes` field is an `integer`
+2. inserts representative old-format tickets and points its unique alias at
+   that index
+3. creates a replacement index where `responseTimeMinutes` is a `float`
+4. asks OpenSearch to reindex the existing documents into that destination
+5. checks the reindex response before atomically moving the alias
+6. reads the installed destination mapping and the alias state
+7. runs the application-style query through the alias and verifies that its
+   hit came from the replacement index with the expected `_source`
+8. verifies both physical indexes contain all fixtures, then deletes them in a
+   `finally` block; deleting an index also removes its alias association
+
+The reindex operation copies `_source`; it does not rewrite JSON numbers into a
+new textual representation. OpenSearch indexes those copied values according
+to the already-installed destination mapping. The test therefore checks both
+that all old documents can be accepted by the new mapping and that the cluster
+ends in the routing state expected by callers.
+
+This is materially different from creating the latest schema and inserting
+fresh fixtures directly into it. That simpler test proves new writes and a
+query agree with today's mapping, but it never exposes the old mapping, stored
+document shapes, reindex behavior, or alias transition. A migration test treats
+the pre-existing state as an input and proves that the transition produces the
+new state.
 
 ## Stop or reset the lab
 
