@@ -30,8 +30,7 @@ Each section introduces one small, inspectable change so the effect on OpenSearc
 20. [Model a support-monitoring document](#20-model-a-support-monitoring-document)
 21. [Test application code against OpenSearch](#21-test-application-code-against-opensearch)
 22. [Safe test cleanup and isolation](#22-safe-test-cleanup-and-isolation)
-23. Optional: index templates
-24. Final migration exercise
+23. [Optional: index templates](#23-optional-index-templates)
 
 ## Quick reference
 
@@ -51,6 +50,7 @@ The exercises have these state boundaries:
 | 5 | `tickets-with-service` | Independent; it can be reset without affecting the migration sequence. |
 | 6 | `tickets-v3`, `tickets-v4` | Independent; both can be reset and compared again. |
 | 20 | `support-monitoring-v1` | Independent; its mapping, fixtures, and queries do not use the earlier ticket indexes. |
+| 23 | Template `support-ticket-snapshots-v1`, index `support-ticket-snapshots-000001` | Independent; replay replaces the template definition and recreates only its matching exercise index. |
 
 To reset every exercise, use `docker compose down` and then start the node again. This repository has no persistent OpenSearch volume, so that removes all lab indexes and lets you replay from Increment 1.
 
@@ -1823,6 +1823,126 @@ OPENSEARCH_TEST_URL=https://search.example.com \
 ```
 
 That command is an intentional refusal demonstration; the tests do not connect to the example host. The safeguard reduces the chance that destructive test setup runs against a shared or production cluster. It is deliberately simple: a local tunnel could still lead elsewhere, and a developer could modify or bypass test code. Cluster authentication, least-privilege credentials, and separate environment configuration remain the stronger controls.
+
+## 23. Optional: index templates
+
+An index template is cluster metadata that supplies mappings and settings when OpenSearch creates a new physical index whose name matches a pattern. It is useful when an application or lifecycle process creates a family of indexes, but it also introduces an implicit dependency: the index creation request no longer contains its complete schema.
+
+This independent exercise uses:
+
+```text
+template: support-ticket-snapshots-v1
+pattern:  support-ticket-snapshots-*
+index:    support-ticket-snapshots-000001
+```
+
+Starting state:
+
+- Docker is installed and its daemon is running
+- commands are run from the repository root
+- no index or alias from an earlier increment is required
+
+Start the local node and wait for it to become healthy:
+
+```sh
+docker compose up -d
+docker compose ps
+```
+
+### Install the template
+
+Reset only the physical index created by this exercise. `PUT` replaces the named template definition, so the following template installation is already replayable and does not require broad template deletion:
+
+```sh
+curl --fail-with-body \
+  --request DELETE \
+  'http://localhost:9200/support-ticket-snapshots-000001?ignore_unavailable=true'
+
+curl --fail-with-body \
+  --request PUT \
+  'http://localhost:9200/_index_template/support-ticket-snapshots-v1' \
+  --header 'Content-Type: application/json' \
+  --data-binary '@index-templates/support-ticket-snapshots-v1.json'
+```
+
+Inspect the stored cluster metadata:
+
+```sh
+curl --fail-with-body \
+  'http://localhost:9200/_index_template/support-ticket-snapshots-v1?pretty'
+```
+
+[`support-ticket-snapshots-v1.json`](index-templates/support-ticket-snapshots-v1.json) contains the pattern and a `template` object with:
+
+- one primary shard and zero replicas for this single-node lab
+- a strict mapping
+- `customerId` and `status` as exact `keyword` fields
+- `title` as analyzed `text`
+- `dueDate` as a strict date-only value
+
+The pattern is deliberately narrow. A broad pattern such as `tickets-*` can silently affect unrelated indexes created later. If several composable templates match a name, priority and composition rules also become part of the effective schema and should be reviewed deliberately.
+
+### Create a matching index
+
+Create the physical index without sending settings or mappings in this request:
+
+```sh
+curl --fail-with-body \
+  --request PUT \
+  'http://localhost:9200/support-ticket-snapshots-000001'
+```
+
+OpenSearch matches the name against `support-ticket-snapshots-*` and applies the template during index creation. Inspect the resulting physical index, rather than assuming that storing the template was sufficient:
+
+```sh
+curl --fail-with-body \
+  'http://localhost:9200/support-ticket-snapshots-000001/_mapping?pretty'
+
+curl --fail-with-body \
+  'http://localhost:9200/support-ticket-snapshots-000001/_settings?filter_path=*.settings.index.number_of_shards,*.settings.index.number_of_replicas&pretty'
+```
+
+The mapping contains the four declared fields and `dynamic: strict`. The settings response reports one primary shard and zero replicas. These values belong to the new index after creation; the index does not consult the template again for every request.
+
+Index one document and retrieve it to confirm that the inherited mapping is usable:
+
+```sh
+curl --fail-with-body \
+  --request PUT \
+  'http://localhost:9200/support-ticket-snapshots-000001/_doc/snapshot-1?refresh=wait_for&pretty' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "customerId": "customer-123",
+    "title": "Payment service unavailable",
+    "status": "open",
+    "dueDate": "2026-09-15"
+  }'
+
+curl --fail-with-body \
+  'http://localhost:9200/support-ticket-snapshots-000001/_doc/snapshot-1?pretty'
+
+curl --fail-with-body \
+  'http://localhost:9200/support-ticket-snapshots-000001/_count?pretty'
+```
+
+The final count is `1`.
+
+### Templates are not migrations
+
+Changing `support-ticket-snapshots-v1` later affects only indexes created after that change. It does not rewrite `support-ticket-snapshots-000001`, update its mapping, or reindex its document. To observe a revised template in this exercise, delete and recreate the physical index with the narrow reset command above. In a real migration, create a new versioned index and move validated data rather than deleting required data.
+
+There is no exact SQL equivalent. A template is closest to an automated DDL policy used whenever new partition-like tables are created:
+
+```sql
+CREATE TABLE support_ticket_snapshots_000001 (
+  customer_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL,
+  due_date DATE NOT NULL
+);
+```
+
+In SQL, a migration normally executes explicit DDL for a particular table. In this OpenSearch exercise, the `PUT` index request is intentionally empty and the matching cluster template supplies that structure. As with a SQL table, changing the recipe used for future objects does not retroactively alter an already-created object.
 
 ## Stop or reset the lab
 

@@ -1,5 +1,7 @@
 # OpenSearch Learning Plan
 
+This was the incremental learning plan used to build this repository. The repository now contains the completed exercises.
+
 ## Goal
 
 Build a very small OpenSearch project incrementally to understand:
@@ -510,8 +512,7 @@ Verify:
 - the legacy index still exists
 - rollback is possible by changing the alias back
 
-Then perform a rollback to the legacy index once, verify it, and switch to the
-new index again.
+Then perform a rollback to the legacy index once, verify it, and switch to the new index again.
 
 Explain why alias switching can be safer than changing every caller to a new physical index name.
 
@@ -845,114 +846,3 @@ Explain:
 - why templates can matter when applications create multiple versioned indexes
 
 Keep this optional if it is not relevant to the current work codebase.
-
----
-
-## Increment 24 — Final Migration Exercise
-
-Start from:
-
-`tickets-legacy`
-
-with:
-
-- explicit old mapping
-- representative existing data
-- alias `tickets`
-- TypeScript application querying the alias
-
-Target:
-
-`tickets-new`
-
-with one meaningful mapping change.
-
-```text
-Inspect existing state
-  ↓
-Create new mapping
-  ↓
-Reindex existing documents
-  ↓
-Validate new index
-  ↓
-Atomically switch alias
-  ↓
-Run application integration tests
-  ↓
-Keep legacy index available for rollback
-```
-
-Then answer, without looking at the implementation:
-
-1. What can safely change in an existing mapping?
-2. What kind of change usually requires another index?
-3. Why do I inspect existing data before migrating?
-4. What does reindex actually do?
-5. What does an alias solve?
-6. What does an alias NOT solve?
-7. What happens to writes occurring during a migration?
-8. Why can an OpenSearch migration test require old-state fixtures?
-9. What does Testcontainers give me?
-10. What should an integration test verify that a unit test cannot?
-11. Why is a blank final-state index insufficient for some migration tests?
-12. How would I debug a failed reindex or unexpected query result?
-
-Do not introduce more advanced OpenSearch features until these answers are clear.
-
----
-
-## Final Mental Model
-
-Be able to explain this:
-
-```text
-Application
-  ↓
-logical alias
-  ↓
-physical index
-  ↓
-mapping determines indexed representation
-  ↓
-documents
-```
-
-And this migration:
-
-```text
-              existing data
-                   ↓
-             tickets-legacy
-                   ↓
-                 reindex
-                   ↓
-             tickets-new
-                   ↑
-             new mapping
-
-Application
-  ↓
-tickets alias
-  ↓
-legacy before migration
-new after atomic switch
-```
-
-And this integration test:
-
-```text
-Testcontainers
-  ↓
-Disposable OpenSearch
-  ↓
-OLD mapping + OLD representative data
-  ↓
-migration/reindex
-  ↓
-NEW index
-  ↓
-real query
-  ↓
-assert expected behavior
-```
