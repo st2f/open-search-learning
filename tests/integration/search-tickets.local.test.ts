@@ -1,6 +1,7 @@
 import { Client } from "@opensearch-project/opensearch";
 import { test } from "vitest";
 import { runBrokenTicketMigrationScenario } from "./test-broken-ticket-migration.ts";
+import { runFindOverdueTicketsScenario } from "./test-find-overdue-tickets.ts";
 import { runTicketMigrationScenario } from "./test-ticket-migration.ts";
 import { runTicketSearchScenario } from "./test-ticket-search.ts";
 
@@ -29,6 +30,16 @@ test("diagnoses a broken migration using local OpenSearch", async () => {
 
   try {
     await runBrokenTicketMigrationScenario(client);
+  } finally {
+    client.close();
+  }
+});
+
+test("finds overdue tickets through application code using local OpenSearch", async () => {
+  const client = new Client({ node: "http://localhost:9200" });
+
+  try {
+    await runFindOverdueTicketsScenario(client);
   } finally {
     client.close();
   }

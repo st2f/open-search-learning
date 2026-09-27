@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc",
+    "test:unit": "vitest run tests/unit",
     "test:integration:local": "vitest run tests/integration/search-tickets.local.test.ts",
     "test:integration": "vitest run tests/integration/search-tickets.test.ts",
     "test:integration:colima": "DOCKER_HOST=unix://${HOME}/.colima/default/docker.sock TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock NODE_OPTIONS=--dns-result-order=ipv4first vitest run tests/integration/search-tickets.test.ts",

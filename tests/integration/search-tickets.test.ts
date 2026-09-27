@@ -5,6 +5,7 @@ import {
 } from "@testcontainers/opensearch";
 import { afterAll, beforeAll, describe, test } from "vitest";
 import { runBrokenTicketMigrationScenario } from "./test-broken-ticket-migration.ts";
+import { runFindOverdueTicketsScenario } from "./test-find-overdue-tickets.ts";
 import { runTicketMigrationScenario } from "./test-ticket-migration.ts";
 import { runTicketSearchScenario } from "./test-ticket-search.ts";
 
@@ -52,5 +53,13 @@ describe("ticket search with Testcontainers", () => {
     }
 
     await runBrokenTicketMigrationScenario(client);
+  });
+
+  test("finds overdue tickets for one service through application code", async () => {
+    if (!client) {
+      throw new Error("OpenSearch client was not initialized");
+    }
+
+    await runFindOverdueTicketsScenario(client);
   });
 });
