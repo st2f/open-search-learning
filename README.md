@@ -29,7 +29,7 @@ Each section introduces one small, inspectable change so the effect on OpenSearc
 19. [Deliberately break the migration](#19-deliberately-break-the-migration)
 20. [Model a support-monitoring document](#20-model-a-support-monitoring-document)
 21. [Test application code against OpenSearch](#21-test-application-code-against-opensearch)
-22. Safe test cleanup and isolation
+22. [Safe test cleanup and isolation](#22-safe-test-cleanup-and-isolation)
 23. Optional: index templates
 24. Final migration exercise
 
@@ -1726,13 +1726,103 @@ The OpenSearch client serializes the query object and the `serviceId` value, it 
 
 Mock pure collaborators only when doing so helps isolate TypeScript business logic. Here, direct input objects are simpler than a mock. Do not treat a mocked OpenSearch client as proof that a query is correct: a mock normally returns the response it was programmed to return regardless of mappings, analyzers, query DSL validity, refresh behavior, or sort semantics.
 
-| Unit test | Integration test |
-| --- | --- |
-| Hit transformation | Mapping, indexed representation, and query |
-| Fast, with no I/O | Real OpenSearch I/O |
-| Does not prove the query | Proves representative search behavior |
+| Unit test                | Integration test                           |
+| ------------------------ | ------------------------------------------ |
+| Hit transformation       | Mapping, indexed representation, and query |
+| Fast, with no I/O        | Real OpenSearch I/O                        |
+| Does not prove the query | Proves representative search behavior      |
 
 These layers answer different questions: the unit test asks whether the TypeScript transformation works, while the integration test asks whether the application function works with OpenSearch.
+
+## 22. Safe test cleanup and isolation
+
+This increment runs multiple integration scenarios against one OpenSearch node without allowing them to share application state. The suite reuses one client and server lifecycle because starting OpenSearch is relatively expensive, but each scenario owns uniquely named physical indexes and deletes exactly those indexes afterward.
+
+Starting state:
+
+- Docker is installed and its daemon is running
+- commands are run from the repository root
+- no index from an earlier increment is required
+
+Install dependencies and run the unit tests, including the endpoint-safeguard tests:
+
+```sh
+npm ci
+npm run typecheck
+npm run test:unit
+```
+
+Run all integration scenarios against the local node:
+
+```sh
+docker compose up -d
+docker compose ps
+npm run test:integration:local
+```
+
+Or run the same scenarios in an isolated Testcontainers node:
+
+```sh
+npm run test:integration
+```
+
+For Colima, use the `npm run test:integration:colima` command.
+
+### Isolation by ownership
+
+Each scenario generates a UUID once and uses it consistently for its physical indexes and aliases:
+
+| Scenario | Owned names |
+| --- | --- |
+| Basic ticket search | `tickets-integration-<UUID>` |
+| Successful migration | `tickets-migration-legacy-<UUID>`, `tickets-migration-new-<UUID>`, and `tickets-migration-<UUID>` alias |
+| Broken migration | `tickets-broken-legacy-<UUID>`, `tickets-broken-new-<UUID>`, and `tickets-broken-<UUID>` alias |
+| Application query | `support-monitoring-application-<UUID>` |
+
+The fixtures use deterministic document IDs and values inside those random namespaces. Random names isolate test runs from each other; deterministic data makes failures reproducible. None of the scenarios reads or changes developer indexes such as `tickets-legacy` or `support-monitoring-v1`.
+
+This is roughly analogous to giving each SQL test a unique temporary schema or database. OpenSearch has no transaction that can wrap index creation, document writes, and mapping changes and then roll everything back. Explicit ownership and deletion provide the isolation boundary instead.
+
+### Cleanup after failures
+
+Each shared scenario follows this shape:
+
+```ts
+const indexName = `test-purpose-${randomUUID()}`;
+let indexCreated = false;
+
+try {
+  await client.indices.create({ index: indexName, body: definition });
+  indexCreated = true;
+
+  // Arrange fixtures, execute behavior, and assert results.
+} finally {
+  if (indexCreated) {
+    await client.indices.delete({ index: indexName });
+  }
+}
+```
+
+`finally` runs after successful assertions and after thrown errors. The flag prevents cleanup from trying to delete an index whose creation failed, which could hide the original error. Migration scenarios track both physical indexes and delete only the names they successfully created. Deleting a physical index also removes its alias associations.
+
+The tests never use wildcard deletion. Even a prefix such as `test-*` can delete another process's concurrent indexes, and a broad pattern can destroy developer or production data if configuration points at the wrong cluster. Wildcard cleanup is defensible only when the entire cluster is known to be disposable and owned by that test lifecycle; exact-name cleanup is safer here and costs little.
+
+### Endpoint safeguard
+
+[`opensearch-test-safety.ts`](tests/support/opensearch-test-safety.ts) checks the endpoint before any scenario performs setup or cleanup:
+
+- local mode accepts only `localhost`, `127.0.0.1`, or IPv6 loopback
+- Testcontainers mode accepts the URL returned by the container that this test suite started and will stop
+- other local-mode hosts fail before an OpenSearch client is created
+
+The local suite defaults to `http://localhost:9200`. Its endpoint can be made explicit with `OPENSEARCH_TEST_URL`, but a non-loopback value is rejected:
+
+```sh
+OPENSEARCH_TEST_URL=https://search.example.com \
+  npm run test:integration:local
+```
+
+That command is an intentional refusal demonstration; the tests do not connect to the example host. The safeguard reduces the chance that destructive test setup runs against a shared or production cluster. It is deliberately simple: a local tunnel could still lead elsewhere, and a developer could modify or bypass test code. Cluster authentication, least-privilege credentials, and separate environment configuration remain the stronger controls.
 
 ## Stop or reset the lab
 

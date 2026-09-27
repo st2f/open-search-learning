@@ -4,12 +4,13 @@ import {
   type StartedOpenSearchContainer,
 } from "@testcontainers/opensearch";
 import { afterAll, beforeAll, describe, test } from "vitest";
+import { assertSafeTestEndpoint } from "../support/opensearch-test-safety.ts";
 import { runBrokenTicketMigrationScenario } from "./test-broken-ticket-migration.ts";
 import { runFindOverdueTicketsScenario } from "./test-find-overdue-tickets.ts";
 import { runTicketMigrationScenario } from "./test-ticket-migration.ts";
 import { runTicketSearchScenario } from "./test-ticket-search.ts";
 
-describe("ticket search with Testcontainers", () => {
+describe("OpenSearch integration scenarios with Testcontainers", () => {
   let container: StartedOpenSearchContainer | undefined;
   let client: Client | undefined;
 
@@ -23,7 +24,9 @@ describe("ticket search with Testcontainers", () => {
       })
       .start();
 
-    client = new Client({ node: container.getHttpUrl() });
+    const endpoint = container.getHttpUrl();
+    assertSafeTestEndpoint(endpoint, "testcontainers");
+    client = new Client({ node: endpoint });
   }, 130_000);
 
   afterAll(async () => {

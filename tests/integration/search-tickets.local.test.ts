@@ -1,46 +1,54 @@
 import { Client } from "@opensearch-project/opensearch";
-import { test } from "vitest";
+import { afterAll, beforeAll, describe, test } from "vitest";
+import { assertSafeTestEndpoint } from "../support/opensearch-test-safety.ts";
 import { runBrokenTicketMigrationScenario } from "./test-broken-ticket-migration.ts";
 import { runFindOverdueTicketsScenario } from "./test-find-overdue-tickets.ts";
 import { runTicketMigrationScenario } from "./test-ticket-migration.ts";
 import { runTicketSearchScenario } from "./test-ticket-search.ts";
 
-test("installs the ticket mapping and finds an open payment ticket using local OpenSearch", async () => {
-  const client = new Client({ node: "http://localhost:9200" });
+describe("OpenSearch integration scenarios using the local node", () => {
+  let client: Client | undefined;
 
-  try {
+  beforeAll(() => {
+    const endpoint =
+      process.env.OPENSEARCH_TEST_URL ?? "http://localhost:9200";
+    assertSafeTestEndpoint(endpoint, "local");
+    client = new Client({ node: endpoint });
+  });
+
+  afterAll(() => {
+    client?.close();
+  });
+
+  test("installs the ticket mapping and finds an open payment ticket", async () => {
+    if (!client) {
+      throw new Error("OpenSearch client was not initialized");
+    }
+
     await runTicketSearchScenario(client);
-  } finally {
-    client.close();
-  }
-});
+  });
 
-test("migrates existing legacy tickets using local OpenSearch", async () => {
-  const client = new Client({ node: "http://localhost:9200" });
+  test("migrates existing legacy tickets", async () => {
+    if (!client) {
+      throw new Error("OpenSearch client was not initialized");
+    }
 
-  try {
     await runTicketMigrationScenario(client);
-  } finally {
-    client.close();
-  }
-});
+  });
 
-test("diagnoses a broken migration using local OpenSearch", async () => {
-  const client = new Client({ node: "http://localhost:9200" });
+  test("diagnoses a broken migration", async () => {
+    if (!client) {
+      throw new Error("OpenSearch client was not initialized");
+    }
 
-  try {
     await runBrokenTicketMigrationScenario(client);
-  } finally {
-    client.close();
-  }
-});
+  });
 
-test("finds overdue tickets through application code using local OpenSearch", async () => {
-  const client = new Client({ node: "http://localhost:9200" });
+  test("finds overdue tickets through application code", async () => {
+    if (!client) {
+      throw new Error("OpenSearch client was not initialized");
+    }
 
-  try {
     await runFindOverdueTicketsScenario(client);
-  } finally {
-    client.close();
-  }
+  });
 });
